@@ -257,6 +257,7 @@ class ReactAgent:
         包含 RAG 知识检索（如果涉及 MC 知识）和人格化回复。
 
         响应速度目标：2-5 秒（仅 1 次 LLM 调用）。
+        RAG 检索与记忆检索并行发起，节省 1-3 秒延迟。
         """
         player_name = game_state.get("player_name", "Player")
         logger.info(f"[Chat] 玩家: {player_name} | 消息: {player_message}")
@@ -266,24 +267,25 @@ class ReactAgent:
         # 记录一次日常聊天互动（增加好感）
         self.personality.record_interaction(player_name, "casual_chat")
 
-        # RAG 检索（可能涉及 MC 知识）
-        rag_context = ""
-        try:
-            knowledge = await self.retriever.search(player_message, top_k=3)
-            if knowledge:
-                rag_parts = []
-                for doc in knowledge:
-                    rag_parts.append(doc["content"][:400])
-                rag_context = "\n\n【参考资料（融入回答，不要照搬）】\n" + "\n---\n".join(rag_parts)
-        except Exception as e:
-            logger.warning(f"聊天模式 RAG 检索失败: {e}")
+        # RAG 检索与记忆检索并行发起，减少串行等待
+        rag_result, memory_result = await asyncio.gather(
+            self.retriever.search(player_message, top_k=3),
+            self.memory.get_relevant_context(player_message),
+            return_exceptions=True,
+        )
 
-        # 记忆上下文
+        rag_context = ""
+        if isinstance(rag_result, list) and rag_result:
+            rag_parts = [doc["content"][:400] for doc in rag_result]
+            rag_context = "\n\n【参考资料（融入回答，不要照搬）】\n" + "\n---\n".join(rag_parts)
+        elif isinstance(rag_result, Exception):
+            logger.warning(f"聊天模式 RAG 检索失败: {rag_result}")
+
         memory_context = ""
-        try:
-            memory_context = await self.memory.get_relevant_context(player_message)
-        except Exception as e:
-            logger.warning(f"记忆检索失败: {e}")
+        if isinstance(memory_result, str):
+            memory_context = memory_result
+        elif isinstance(memory_result, Exception):
+            logger.warning(f"记忆检索失败: {memory_result}")
 
         # 构建 prompt
         system_prompt = self.personality.get_chat_system_prompt(player_name)
@@ -421,7 +423,7 @@ class ReactAgent:
 
         user_prompt = (
             f"任务指令: {task}\n\n"
-            f"游戏状态（最新）:\n{json.dumps(game_state, ensure_ascii=False, indent=2)}\n\n"
+            f"游戏状态（最新）:\n{json.dumps(self._trim_game_state(game_state), ensure_ascii=False, indent=2)}\n\n"
         )
         if context:
             user_prompt += f"参考信息:\n{context}\n\n"
@@ -535,7 +537,7 @@ class ReactAgent:
         user_prompt = (
             f"任务指令: {task}\n\n"
             f"已执行步骤（部分失败）:\n{executed_summary}\n\n"
-            f"当前游戏状态:\n{json.dumps(game_state, ensure_ascii=False, indent=2)}\n\n"
+            f"当前游戏状态:\n{json.dumps(self._trim_game_state(game_state), ensure_ascii=False, indent=2)}\n\n"
         )
         if context:
             user_prompt += f"参考信息:\n{context}\n\n"
@@ -868,6 +870,19 @@ class ReactAgent:
         return f"{PLAN_SYSTEM_PROMPT}\n\n【当前情绪状态】\n{personality_hint}"
 
     @staticmethod
+    def _trim_game_state(game_state: dict) -> dict:
+        """
+        裁剪 game_state，移除对规划无用的大字段，减少 LLM 输入 token 数量。
+
+        保留：position、inventory、nearby_resources、environment、agent_position、
+              player_name、health、hunger、dimension、time、nearby_entities
+        移除：nearby_blocks（60条原始方块，规划不需要）、horizon_scan（大型地形数据）
+        horizon_scan 的摘要已包含在 REACT_SYSTEM_PROMPT 和上下文说明中。
+        """
+        exclude = {"nearby_blocks", "horizon_scan"}
+        return {k: v for k, v in game_state.items() if k not in exclude}
+
+    @staticmethod
     def _repair_json(raw: str) -> str:
         """修复常见 LLM JSON 错误：尾逗号、非法控制字符"""
         s = raw.strip()
@@ -925,7 +940,7 @@ class ReactAgent:
         parts = [
             f"任务指令: {player_message}",
             f"\n当前步数: {current_step}/{MAX_STEPS}",
-            f"\n游戏状态（最新）:\n{json.dumps(game_state, ensure_ascii=False, indent=2)}",
+            f"\n游戏状态（最新）:\n{json.dumps(self._trim_game_state(game_state), ensure_ascii=False, indent=2)}",
         ]
 
         if context:

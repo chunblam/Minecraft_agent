@@ -18,6 +18,7 @@ RAG 检索模块（LLM 语义分类版）
 import os
 import json
 import asyncio
+import collections
 from openai import AsyncOpenAI
 import chromadb
 from loguru import logger
@@ -133,7 +134,12 @@ class EmbeddingClient:
     """
     硅基流动 BAAI/bge-m3 Embedding API 客户端。
     使用 OpenAI SDK 格式调用（兼容接口），将文本转为浮点数向量。
+
+    内置 LRU 缓存（上限 512 条），相同文本重复调用时直接返回缓存向量，
+    跳过 API 请求，显著降低技能搜索和 RAG 检索的延迟。
     """
+
+    _CACHE_MAX_SIZE = 512
 
     def __init__(self) -> None:
         api_key = os.getenv("SILICONFLOW_API_KEY", "")
@@ -144,11 +150,13 @@ class EmbeddingClient:
             logger.warning("SILICONFLOW_API_KEY 未设置，向量化功能将失败")
 
         self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-    
-    #async 异步函数，使用 await 等待异步操作完成，返回一个协程对象，协程对象可以被 await 等待
+
+        # LRU 缓存：text → embedding vector
+        self._cache: collections.OrderedDict[str, list[float]] = collections.OrderedDict()
+
     async def embed(self, text: str) -> list[float]:
         """
-        将单条文本向量化。
+        将单条文本向量化，命中缓存时直接返回。
 
         Args:
             text: 输入文本（建议 512 token 以内）
@@ -156,13 +164,27 @@ class EmbeddingClient:
         Returns:
             浮点数向量，失败时返回空列表
         """
+        cache_key = text.strip()
+
+        if cache_key in self._cache:
+            self._cache.move_to_end(cache_key)
+            logger.debug(f"Embedding 缓存命中: {cache_key[:40]!r}")
+            return self._cache[cache_key]
+
         try:
             response = await self.client.embeddings.create(
                 model=self.model,
                 input=text,
                 encoding_format="float",
             )
-            return response.data[0].embedding 
+            vector = response.data[0].embedding
+
+            # 写缓存，超容量时淘汰最旧条目
+            if len(self._cache) >= self._CACHE_MAX_SIZE:
+                self._cache.popitem(last=False)
+            self._cache[cache_key] = vector
+            return vector
+
         except Exception as e:
             logger.error(f"Embedding API 调用失败: {e}", exc_info=True)
             return []

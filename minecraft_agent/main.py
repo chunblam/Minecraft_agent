@@ -31,6 +31,7 @@ from websockets.server import WebSocketServerProtocol
 
 from agent.connection_manager import connection_manager
 from agent.react_agent import ReactAgent
+from agent.autonomous_explorer import AutonomousExplorer
 
 load_dotenv()
 
@@ -92,6 +93,10 @@ WS_PORT = int(os.getenv("WS_PORT", "8765"))
 # 全局 Agent 实例（单例，保持记忆跨会话连续）
 agent = ReactAgent()
 
+# 自主探索器（Voyager-style Automatic Curriculum）
+explorer = AutonomousExplorer(agent.llm, agent.skill_lib)
+explorer.set_agent(agent)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 连接处理主循环
@@ -132,10 +137,21 @@ async def handle_connection(websocket: WebSocketServerProtocol) -> None:
 
                 logger.info(f"[玩家] {game_state.get('player_name', '?')}: {player_message}")
 
+                # 玩家主动发言时通知探索器让步
+                explorer.notify_player_active()
+
                 # create_task 关键点：允许 asyncio 在 agent.run() 等待期间
                 # 继续处理下方的 observation 消息
                 asyncio.create_task(
                     _process_player_message(game_state, player_message)
+                )
+
+            elif msg_type == "game_state_update":
+                # ── Java Mod 周期性推送游戏状态（每 60s 一次）→ 触发自主探索 ──
+                game_state = data.get("game_state", {})
+                logger.debug(f"[Explorer] 收到 game_state_update，玩家: {game_state.get('player_name', '?')}")
+                asyncio.create_task(
+                    explorer.on_game_state_update(game_state)
                 )
 
             elif msg_type == "observation":

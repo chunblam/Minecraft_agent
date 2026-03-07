@@ -53,6 +53,7 @@ python main.py                  # 启动 WebSocket 服务
 
 - **任务执行**：砍树、挖矿、合成、附魔、与实体互动
 - **技能学习**：成功轨迹抽象为参数化技能，可复用
+- **自主探索**：空闲时根据 game_state 自动提议并执行任务（Voyager 风格）
 - **知识问答**：RAG 检索知识库，回答 Minecraft 相关问题
 - **输入模拟**：客户端模拟 WASD + 鼠标，实现 Voyager 式操控
 
@@ -69,8 +70,35 @@ python main.py                  # 启动 WebSocket 服务
 
 ## 文档
 
-- [战斗与自主探索扩展](docs/COMBAT_AND_AUTONOMY.md)
-- [Agent 重置指南](docs/RESET_AGENT.md)
+| 文档 | 说明 |
+|------|------|
+| [架构与运行逻辑](docs/ARCHITECTURE.md) | 系统架构、消息协议、理想运行流程、模块职责 |
+| [项目评估](docs/PROJECT_EVALUATION.md) | 架构评分、技术栈、待改进项、后续方向 |
+| [战斗与自主探索扩展](docs/COMBAT_AND_AUTONOMY.md) | 战斗动作、自主探索实现与扩展 |
+| [Agent 重置指南](docs/RESET_AGENT.md) | 技能库、记忆、知识库重置方法 |
+
+## 本地开发与推送
+
+### 更新本地仓库并推送到 GitHub
+
+```bash
+# 1. 查看当前状态
+git status
+
+# 2. 添加所有更改（或指定文件）
+git add .
+
+# 3. 提交
+git commit -m "docs: 新增架构文档，更新项目评估与 README"
+
+# 4. 推送到远程（首次需配置远程仓库与认证）
+git push origin main
+```
+
+**认证说明**：若 `git push` 失败，需配置 GitHub 凭据：
+
+- **HTTPS**：使用 [Personal Access Token](https://github.com/settings/tokens) 替代密码
+- **SSH**：配置 SSH 密钥并改用 `git@github.com:用户名/Minecraft_agent.git`
 
 ## 许可证
 
