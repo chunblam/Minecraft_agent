@@ -1,0 +1,30 @@
+# ── Python ─────────────────────────────────────────────────
+.env
+*.pyc
+__pycache__/
+*.egg-info/
+.eggs/
+venv/
+.venv/
+.pytest_cache/
+.mypy_cache/
+
+# ── 数据与日志（含敏感信息）────────────────────────────────
+minecraft_agent/data/chroma_db/
+minecraft_agent/logs/*.log
+minecraft_agent/logs/*.zip
+
+# ── Java / Gradle ─────────────────────────────────────────
+mc_fabric_mod/build/
+mc_fabric_mod/.gradle/
+*.class
+*.jar
+
+# ── IDE ───────────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+
+# ── 系统 ──────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
