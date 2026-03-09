@@ -1,5 +1,5 @@
-# WebSocket 服务器
-websockets>=12.0
+# HTTP 客户端（Mineflayer 环境）
+aiohttp>=3.9.0
 
 # OpenAI SDK（兼容 DeepSeek / 硅基流动 API）
 openai>=1.30.0
