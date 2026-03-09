@@ -26,6 +26,7 @@ cd minecraft_agent
 cp .env.example .env   # 填写 DEEPSEEK_API_KEY 等
 pip install -r requirements.txt
 python load_knowledge_base.py   # 首次需加载知识库
+python load_demonstrations.py   # 可选：预置演示技能（模仿 MineDojo）
 python main.py                  # 启动 WebSocket 服务
 ```
 
@@ -76,6 +77,7 @@ python main.py                  # 启动 WebSocket 服务
 | [项目评估](docs/PROJECT_EVALUATION.md) | 架构评分、技术栈、待改进项、后续方向 |
 | [战斗与自主探索扩展](docs/COMBAT_AND_AUTONOMY.md) | 战斗动作、自主探索实现与扩展 |
 | [Agent 重置指南](docs/RESET_AGENT.md) | 技能库、记忆、知识库重置方法 |
+| [Voyager 差异与演示技能](docs/VOYAGER_AND_DEMO.md) | 与 MineDojo 的差异、演示加载、改进方向 |
 
 ## 本地开发与推送
 

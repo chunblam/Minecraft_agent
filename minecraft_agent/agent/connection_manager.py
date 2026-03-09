@@ -155,6 +155,27 @@ class ConnectionManager:
         ))
         logger.debug(f"observation 已匹配: req={request_id[:8]}...")
 
+    async def send_record_demo(
+        self,
+        command: str,
+        player_name: str | None = None,
+        name: str | None = None,
+    ) -> None:
+        """向 Mod 发送录制控制（录制：开始/结束），不等待回执。"""
+        if not self.is_connected():
+            logger.warning("Mod 未连接，无法发送 record_demo")
+            return
+        msg = {"type": "record_demo", "command": command}
+        if name:
+            msg["name"] = name
+        if player_name:
+            msg["player_name"] = player_name
+        try:
+            await self._websocket.send(json.dumps(msg, ensure_ascii=False))
+            logger.info(f"[→ Mod] record_demo command={command} name={name or '-'}")
+        except Exception as e:
+            logger.error(f"发送 record_demo 失败: {e}")
+
     # ── 最终响应 ───────────────────────────────────────────────────────────────
 
     async def send_final_response(self, action_type: str, display_message: str) -> None:
@@ -183,9 +204,19 @@ class ConnectionManager:
     ) -> tuple[str, dict]:
         """Mod 未连接时的本地模拟，返回 (observation, empty_state_update)"""
         msg = display_message or params.get("message", "")
+        def _move_to_desc() -> str:
+            if "direction" in params and "distance" in params:
+                return f"[模拟] 向 {params.get('direction', '?')} 移动 {params.get('distance', 0)} 格"
+            if "direction_deg" in params and "distance" in params:
+                return f"[模拟] 向 {params.get('direction_deg', 0)}° 方向移动 {params.get('distance', 0)} 格"
+            if "region_center" in params and "radius" in params:
+                rc = params.get("region_center")
+                r = params.get("radius", 2)
+                return f"[模拟] 移动到区域 {rc} 半径 {r} 格"
+            return f"[模拟] 移动到 ({params.get('x', 0)}, {params.get('y', 64)}, {params.get('z', 0)})"
         simulations = {
             "chat":           f"[模拟] 向玩家发送消息: {msg}",
-            "move_to":        f"[模拟] 移动到 ({params.get('x', 0)}, {params.get('y', 64)}, {params.get('z', 0)})",
+            "move_to":        _move_to_desc(),
             "mine_block":     f"[模拟] 挖掘方块 ({params.get('x', 0)}, {params.get('y', 64)}, {params.get('z', 0)})",
             "place_block":    f"[模拟] 放置 {params.get('block', 'stone')} 在 ({params.get('x', 0)}, {params.get('y', 64)}, {params.get('z', 0)})",
             "craft_item":     f"[模拟] 合成 {params.get('item', '?')} x{params.get('count', 1)}",
@@ -198,6 +229,8 @@ class ConnectionManager:
             "find_resource":  f"[模拟] 搜索 {params.get('type', '?')} 半径{params.get('radius', 24)} → 找到 2 处：(10,64,5) (12,65,-3)",
             "scan_area":      "[模拟] 扫描区域完成",
             "finish":         "[模拟] 任务完成",
+            "turn":           f"[模拟] 转向 {params.get('yaw_delta', 0)}°",
+            "jump":           "[模拟] 已跳跃",
         }
         return simulations.get(action_type, f"[模拟] 执行 {action_type}"), {}
 

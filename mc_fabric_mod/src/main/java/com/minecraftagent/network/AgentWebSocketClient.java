@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.minecraftagent.action.ActionExecutor;
+import com.minecraftagent.event.DemoRecordingManager;
 import com.minecraftagent.util.AgentLogger;
 import net.minecraft.server.MinecraftServer;
 import org.slf4j.Logger;
@@ -201,8 +202,8 @@ public class AgentWebSocketClient {
                 server.execute(() -> {
                     // v3：move_to/mine_block 通过客户端模拟 WASD+鼠标输入执行
                     actionExecutor.executeWithState(requestId, actionType, params, displayMsg, (result) -> {
-                        AgentLogger.ws("SEND", "observation", "req=" + requestId + " | " + result.observation());
-                        sendObservationWithState(requestId, true, result.observation(), result.gameStateUpdate());
+                        AgentLogger.ws("SEND", "observation", "req=" + requestId + " | success=" + result.success() + " | " + result.observation());
+                        sendObservationWithState(requestId, result.success(), result.observation(), result.gameStateUpdate());
                     });
                 });
             }
@@ -212,6 +213,23 @@ public class AgentWebSocketClient {
                 String displayMsg = json.has("display_message") ? json.get("display_message").getAsString() : "";
                 if (!displayMsg.isEmpty()) {
                     server.execute(() -> actionExecutor.broadcastAgentMessage(displayMsg));
+                }
+            }
+
+            case "record_demo" -> {
+                String cmd = json.has("command") ? json.get("command").getAsString() : "";
+                String skillName = json.has("name") ? json.get("name").getAsString() : null;
+                String playerName = json.has("player_name") ? json.get("player_name").getAsString() : null;
+                if ("start".equalsIgnoreCase(cmd)) {
+                    if (playerName == null || playerName.isBlank()) {
+                        var first = server.getPlayerManager().getPlayerList().stream().findFirst();
+                        playerName = first.map(p -> p.getName().getString()).orElse(null);
+                    }
+                    if (playerName != null) {
+                        DemoRecordingManager.start(this, playerName, skillName);
+                    }
+                } else if ("stop".equalsIgnoreCase(cmd)) {
+                    DemoRecordingManager.stop();
                 }
             }
 

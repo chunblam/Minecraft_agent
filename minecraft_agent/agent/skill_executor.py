@@ -182,13 +182,13 @@ async def execute_skill_template(
                     sub_action = sub.get("action", "")
                     if sub_action == "move_to":
                         obs = await execute_action_fn(
-                            "move_to", {"x": x, "y": y, "z": z}
+                            "move_to", {"region_center": [x, y, z], "radius": 2}
                         )
                         trajectory.append({
                             "step": len(trajectory) + 1,
-                            "thought": f"[Template] 移动到 ({x},{y},{z})",
+                            "thought": f"[Template] 移动到 ({x},{y},{z}) 附近",
                             "action": "move_to",
-                            "action_params": {"x": x, "y": y, "z": z},
+                            "action_params": {"region_center": [x, y, z], "radius": 2},
                             "observation": obs,
                         })
                     elif sub_action == "mine_block":

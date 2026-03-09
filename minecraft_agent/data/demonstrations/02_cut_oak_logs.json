@@ -1,0 +1,16 @@
+{
+  "skill_name": "砍橡木",
+  "skill_type": "parameterized",
+  "template_type": "parameterized",
+  "description": "查找并砍伐指定数量的橡木原木",
+  "params_schema": {
+    "block_type": {"source": "task", "hint": "oak_log"},
+    "count": {"source": "task", "default": 5},
+    "radius": {"source": "fixed", "value": 24}
+  },
+  "procedure": [
+    {"action": "find_resource", "params": {"type": "oak_log", "radius": "{{radius}}"}, "store_as": "targets"},
+    {"action": "for_each", "over": "targets", "limit": "{{count}}", "do": [{"action": "move_to"}, {"action": "mine_block"}]}
+  ],
+  "applicable_scenarios": ["砍橡木", "砍树", "采集木头", "橡木"]
+}

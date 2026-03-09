@@ -18,6 +18,26 @@ public class SimulatedInput extends Input {
         pressingRight = false;
     }
 
+    /** 朝前 + 左平移（绕障尝试） */
+    public void setForwardLeft() {
+        movementForward = 1f;
+        movementSideways = 1f;
+        pressingForward = true;
+        pressingLeft = true;
+        pressingRight = false;
+        pressingBack = false;
+    }
+
+    /** 朝前 + 右平移（绕障尝试） */
+    public void setForwardRight() {
+        movementForward = 1f;
+        movementSideways = -1f;
+        pressingForward = true;
+        pressingRight = true;
+        pressingLeft = false;
+        pressingBack = false;
+    }
+
     /** 控制跳跃键（遇障碍物时设为 true，通过原版物理引擎自动跳跃） */
     public void setJump(boolean doJump) {
         jumping = doJump;

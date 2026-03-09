@@ -137,6 +137,13 @@ async def handle_connection(websocket: WebSocketServerProtocol) -> None:
 
                 logger.info(f"[玩家] {game_state.get('player_name', '?')}: {player_message}")
 
+                # 录制控制：录制：开始 [技能名] / 录制：结束（不进入 LLM 分流）
+                if player_message.startswith("录制："):
+                    asyncio.create_task(
+                        _handle_record_command(game_state, player_message)
+                    )
+                    continue
+
                 # 玩家主动发言时通知探索器让步
                 explorer.notify_player_active()
 
@@ -144,6 +151,13 @@ async def handle_connection(websocket: WebSocketServerProtocol) -> None:
                 # 继续处理下方的 observation 消息
                 asyncio.create_task(
                     _process_player_message(game_state, player_message)
+                )
+
+            elif msg_type == "demonstration_trajectory":
+                name = data.get("name", "未命名演示")
+                trajectory = data.get("trajectory", [])
+                asyncio.create_task(
+                    _store_demonstration(name, trajectory)
                 )
 
             elif msg_type == "game_state_update":
@@ -180,6 +194,59 @@ async def handle_connection(websocket: WebSocketServerProtocol) -> None:
     finally:
         # 清理连接状态，取消所有待处理的行动请求
         connection_manager.clear_connection()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 录制控制与演示技能入库
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def _handle_record_command(game_state: dict, player_message: str) -> None:
+    """处理「录制：开始 [技能名]」/「录制：结束」，向 Mod 发送 record_demo。"""
+    raw = player_message.strip()
+    if not raw.startswith("录制："):
+        return
+    rest = raw[3:].strip()
+    player_name = game_state.get("player_name") or "Player"
+    try:
+        if rest == "开始" or rest.startswith("开始 "):
+            name = rest[2:].strip() if len(rest) > 2 else None
+            await connection_manager.send_record_demo("start", player_name, name)
+            await connection_manager.send_final_response(
+                "chat", "已开启录制，请开始操作；完成后输入「录制：结束」保存到技能库。"
+            )
+        elif rest == "结束":
+            await connection_manager.send_record_demo("stop")
+            await connection_manager.send_final_response(
+                "chat", "已结束录制，轨迹将自动存入技能库。"
+            )
+        else:
+            await connection_manager.send_final_response(
+                "chat", "用法：录制：开始 [技能名] 或 录制：结束"
+            )
+    except Exception as e:
+        logger.error(f"录制控制失败: {e}", exc_info=True)
+        await connection_manager.send_final_response("chat", "录制指令发送失败，请重试。")
+
+
+async def _store_demonstration(name: str, trajectory: list) -> None:
+    """将 Mod 回传的 trajectory 存为 demonstration 技能。"""
+    if not trajectory:
+        logger.warning("demonstration_trajectory 为空，跳过存储")
+        return
+    try:
+        skill_json = {
+            "skill_name": name,
+            "skill_type": "demonstration",
+            "description": "玩家或视频录制的演示轨迹，可供检索与复用",
+            "trajectory": trajectory,
+            "applicable_scenarios": ["演示", "录制", "参考"],
+        }
+        ok = await agent.skill_lib.load_demonstration(skill_json, source="recording")
+        if ok:
+            logger.success(f"演示技能已入库: {name}（共 {len(trajectory)} 步）")
+    except Exception as e:
+        logger.error(f"存储演示技能失败: {e}", exc_info=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

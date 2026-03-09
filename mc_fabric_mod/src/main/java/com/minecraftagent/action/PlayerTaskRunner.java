@@ -29,7 +29,7 @@ public class PlayerTaskRunner {
 
     // 原版行走速度 4.317 格/秒，20 tick/秒 → 每 tick 约 0.216 格
     private static final double MOVE_SPEED = 0.216;
-    private static final double REACH_DISTANCE = 2.0;     // 到达判定（略小于攻击距离 3 格）
+    private static final double REACH_DISTANCE = 3.0;     // 到达判定（略小于攻击距离 3 格）
     private static final int MAX_MOVE_TICKS = 400;        // 移动最大 tick 数（约 20 秒）
     private static final int MAX_MINE_TICKS = 300;       // 挖掘最大 tick 数（约 15 秒，应对黑曜石等）
 

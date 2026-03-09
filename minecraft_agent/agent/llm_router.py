@@ -10,10 +10,14 @@ LLM 分层调用路由模块（v3 —— 全 V3 快速推理）
 性能：V3 每次调用约 2-10 秒，无 R1 长推理等待。
 """
 
+import asyncio
 import os
 import time
 from openai import AsyncOpenAI
 from loguru import logger
+
+# LLM 单次调用超时（秒），避免 API 无响应时长时间“卡住”
+LLM_CALL_TIMEOUT = float(os.getenv("DEEPSEEK_LLM_TIMEOUT", "90"))
 
 
 class LLMRouter:
@@ -63,24 +67,30 @@ class LLMRouter:
         user_prompt: str,
         temperature: float,
     ) -> str:
-        """底层 API 调用，带耗时统计和错误处理。"""
+        """底层 API 调用，带超时、耗时统计和错误处理。超时或异常时返回空字符串，避免长时间卡住。"""
+        t0 = time.monotonic()
+        logger.info(f"[LLM] 请求中（超时 {int(LLM_CALL_TIMEOUT)}s）: {model}")
         try:
-            t0 = time.monotonic()
-            logger.debug(f"调用模型: {model}")
-            response = await self.client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=temperature,
-                stream=False,
+            response = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=temperature,
+                    stream=False,
+                ),
+                timeout=LLM_CALL_TIMEOUT,
             )
             content = response.choices[0].message.content or ""
             elapsed = time.monotonic() - t0
             logger.debug(f"模型响应 [{elapsed:.1f}s]（前200字）: {content[:200]}")
             return content
-
+        except asyncio.TimeoutError:
+            elapsed = time.monotonic() - t0
+            logger.warning(f"[LLM] 调用超时（{elapsed:.1f}s > {LLM_CALL_TIMEOUT}s），返回空结果，请检查网络或 API")
+            return ""
         except Exception as e:
             logger.error(f"LLM 调用失败 (model={model}): {e}", exc_info=True)
             return ""

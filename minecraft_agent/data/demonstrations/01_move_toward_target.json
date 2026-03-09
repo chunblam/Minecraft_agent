@@ -1,0 +1,13 @@
+{
+  "skill_name": "向目标大致方向移动",
+  "skill_type": "simple",
+  "description": "向指定坐标大致方向前进，途中自动跳跃和挖掘障碍",
+  "prerequisites": ["目标坐标已知"],
+  "steps": [
+    "执行 move_to 目标坐标",
+    "Java 端会自动：跳跃翻过 1 格高障碍、卡住时自动挖掘前方方块",
+    "到达后执行后续动作（如 mine_block）"
+  ],
+  "tips": ["move_to 已内置障碍应对，无需 LLM 每步重规划"],
+  "applicable_scenarios": ["前往", "移动", "去", "走到"]
+}

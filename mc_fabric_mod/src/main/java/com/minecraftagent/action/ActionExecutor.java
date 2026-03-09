@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import com.minecraftagent.network.AgentWebSocketClient;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import com.minecraftagent.util.AgentLogger;
+import com.minecraftagent.util.NativePathfinder;
 import com.minecraftagent.util.WorldScanner;
 import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
@@ -30,6 +31,8 @@ import net.minecraft.util.Identifier;
 import net.minecraft.util.collection.DefaultedList;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.Heightmap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -69,8 +72,13 @@ public class ActionExecutor {
 
     // ── 执行入口 ──────────────────────────────────────────────────────────────
 
-    /** 行动结果：观察字符串 + 游戏状态快照 */
-    public record ActionResult(String observation, JsonObject gameStateUpdate) {}
+    /** 行动结果：观察字符串 + 游戏状态快照 + 是否成功（move_to 超时等为 false） */
+    public record ActionResult(String observation, JsonObject gameStateUpdate, boolean success) {
+        /** 兼容旧调用：无 success 时默认为 true */
+        public ActionResult(String observation, JsonObject gameStateUpdate) {
+            this(observation, gameStateUpdate, true);
+        }
+    }
 
     /**
      * 执行行动，完成后调用 onComplete。
@@ -87,7 +95,7 @@ public class ActionExecutor {
             executeAsyncAction(requestId, actionType, params, onComplete);
         } else {
             String observation = execute(actionType, params, displayMessage);
-            onComplete.accept(new ActionResult(observation, buildStateUpdate()));
+            onComplete.accept(new ActionResult(observation, buildStateUpdate(), true));
         }
     }
 
@@ -95,34 +103,56 @@ public class ActionExecutor {
                                     java.util.function.Consumer<ActionResult> onComplete) {
         ServerPlayerEntity player = PlayerContext.getCurrentOrFirst(server);
         if (player == null) {
-            onComplete.accept(new ActionResult("无可用玩家", buildStateUpdate()));
+            onComplete.accept(new ActionResult("无可用玩家", buildStateUpdate(), false));
             return;
         }
 
+        ServerWorld world = (ServerWorld) player.getWorld();
         double x = getDouble(params, "x", player.getX());
         double y = getDouble(params, "y", player.getY());
         double z = getDouble(params, "z", player.getZ());
+
+        if ("move_to".equals(actionType)) {
+            BlockPos resolved = resolveMoveToTarget(world, player, params);
+            if (resolved != null) {
+                x = resolved.getX() + 0.5;
+                y = resolved.getY();
+                z = resolved.getZ() + 0.5;
+            }
+        }
 
         var completion = new com.minecraftagent.network.AgentNetworking.PendingCompletion(
                 onComplete,
                 this::buildStateUpdate
         );
+
+        if ("move_to".equals(actionType)) {
+            BlockPos from = player.getBlockPos();
+            BlockPos to = new BlockPos((int) Math.round(x), (int) Math.round(y), (int) Math.round(z));
+            var path = NativePathfinder.findPath(world, from, to);
+            if (path != null && path.size() >= 2) {
+                boolean sentPath = com.minecraftagent.network.AgentNetworking.sendPathToClient(
+                        player, requestId, actionType, path, completion);
+                if (sentPath) return;
+            }
+        }
+
         boolean sent = com.minecraftagent.network.AgentNetworking.sendInputToClient(
                 player, requestId, actionType, x, y, z, completion);
         if (!sent) {
             // 回退：客户端无 Mod 时使用服务端直接操控
             if ("move_to".equals(actionType)) {
                 taskRunner.runMoveTo(player, x, y, z)
-                        .thenAccept(obs -> onComplete.accept(new ActionResult(obs, buildStateUpdate())))
+                        .thenAccept(obs -> onComplete.accept(new ActionResult(obs, buildStateUpdate(), true)))
                         .exceptionally(ex -> {
-                            onComplete.accept(new ActionResult("移动失败: " + ex.getMessage(), buildStateUpdate()));
+                            onComplete.accept(new ActionResult("移动失败: " + ex.getMessage(), buildStateUpdate(), false));
                             return null;
                         });
             } else if ("mine_block".equals(actionType)) {
                 taskRunner.runMineBlock(player, (int) x, (int) y, (int) z)
-                        .thenAccept(obs -> onComplete.accept(new ActionResult(obs, buildStateUpdate())))
+                        .thenAccept(obs -> onComplete.accept(new ActionResult(obs, buildStateUpdate(), true)))
                         .exceptionally(ex -> {
-                            onComplete.accept(new ActionResult("挖掘失败: " + ex.getMessage(), buildStateUpdate()));
+                            onComplete.accept(new ActionResult("挖掘失败: " + ex.getMessage(), buildStateUpdate(), false));
                             return null;
                         });
             }
@@ -149,6 +179,8 @@ public class ActionExecutor {
                 case "look_around"     -> executeLookAround(params);
                 case "follow_player"   -> executeFollowPlayer(params);
                 case "look_at"         -> executeLookAt(params);
+                case "turn"            -> executeTurn(params);
+                case "jump"            -> executeJump();
                 case "stop"            -> executeStop();
                 case "finish"          -> {
                     if (displayMessage != null && !displayMessage.isEmpty()) {
@@ -938,6 +970,33 @@ public class ActionExecutor {
         return String.format("已转向 (%.0f,%.0f,%.0f)", x, y, z);
     }
 
+    /**
+     * turn：按角度偏移转向（精细移动用，遇障时可先 turn 再 move_to）。
+     * params: yaw_delta (double) - 角度偏移，正为右转，负为左转（度）
+     */
+    private String executeTurn(JsonObject params) {
+        var player = PlayerContext.getCurrentOrFirst(server);
+        if (player == null) return "无可用玩家";
+        double delta = getDouble(params, "yaw_delta", 0);
+        float newYaw = (float) (player.getYaw() + delta);
+        while (newYaw > 180f) newYaw -= 360f;
+        while (newYaw < -180f) newYaw += 360f;
+        player.setYaw(newYaw);
+        player.setHeadYaw(newYaw);
+        return String.format("已转向 %.0f°（当前朝向 %.0f°）", delta, newYaw);
+    }
+
+    /**
+     * jump：原地跳跃一次（用于上台阶、越过矮障碍）。
+     */
+    private String executeJump() {
+        var player = PlayerContext.getCurrentOrFirst(server);
+        if (player == null) return "无可用玩家";
+        var v = player.getVelocity();
+        player.setVelocity(v.x, 0.42, v.z);
+        return "已跳跃";
+    }
+
     // ── 背包工具方法 ──────────────────────────────────────────────────────────
 
     private ItemStack getItemFromSlot(ServerPlayerEntity player, String slotStr) {
@@ -981,6 +1040,71 @@ public class ActionExecutor {
             return list.isEmpty() ? null : list.get(0);
         }
         return server.getPlayerManager().getPlayer(name);
+    }
+
+    /**
+     * 解析 move_to 目标：支持方向+距离、区域中心+半径、或直接 (x,y,z)。
+     * 方向+距离：direction (north/south/east/west/...) 或 direction_deg (0=北,90=东) + distance。
+     * 区域：region_center ([x,y,z] 或 {x,y,z}) + radius，取中心作为目标。
+     */
+    private static BlockPos resolveMoveToTarget(ServerWorld world, ServerPlayerEntity player, JsonObject params) {
+        if (params == null) return null;
+        BlockPos from = player.getBlockPos();
+
+        // 方向 + 距离
+        if (params.has("distance")) {
+            int distance = getInt(params, "distance", 48);
+            int dx = 0, dz = 0;
+            if (params.has("direction_deg")) {
+                double deg = getDouble(params, "direction_deg", 0);
+                double rad = Math.toRadians(deg);
+                dx = (int) Math.round(Math.sin(rad));
+                dz = (int) -Math.round(Math.cos(rad));
+            } else if (params.has("direction")) {
+                String dir = getString(params, "direction", "north").toLowerCase();
+                switch (dir) {
+                    case "north"     -> { dx =  0; dz = -1; }
+                    case "south"     -> { dx =  0; dz =  1; }
+                    case "east"     -> { dx =  1; dz =  0; }
+                    case "west"     -> { dx = -1; dz =  0; }
+                    case "northeast" -> { dx =  1; dz = -1; }
+                    case "northwest" -> { dx = -1; dz = -1; }
+                    case "southeast" -> { dx =  1; dz =  1; }
+                    case "southwest" -> { dx = -1; dz =  1; }
+                    default -> { dx = 0; dz = -1; }
+                }
+            } else {
+                return null;
+            }
+            if (dx == 0 && dz == 0) return null;
+            int tx = from.getX() + dx * distance;
+            int tz = from.getZ() + dz * distance;
+            int ty = world.getTopY(Heightmap.Type.WORLD_SURFACE, tx, tz);
+            return new BlockPos(tx, ty, tz);
+        }
+
+        // 区域中心 + 半径
+        if (params.has("region_center") && params.has("radius")) {
+            int cx, cy, cz;
+            if (params.get("region_center").isJsonArray()) {
+                JsonArray arr = params.getAsJsonArray("region_center");
+                cx = arr.size() > 0 ? arr.get(0).getAsInt() : from.getX();
+                cy = arr.size() > 1 ? arr.get(1).getAsInt() : from.getY();
+                cz = arr.size() > 2 ? arr.get(2).getAsInt() : from.getZ();
+            } else if (params.get("region_center").isJsonObject()) {
+                JsonObject obj = params.getAsJsonObject("region_center");
+                cx = getInt(obj, "x", from.getX());
+                cy = getInt(obj, "y", from.getY());
+                cz = getInt(obj, "z", from.getZ());
+            } else {
+                return null;
+            }
+            int r = Math.max(0, getInt(params, "radius", 2));
+            int ty = world.getTopY(Heightmap.Type.WORLD_SURFACE, cx, cz);
+            return new BlockPos(cx, ty, cz);
+        }
+
+        return null;
     }
 
     private static double getDouble(JsonObject o, String k, double def) {

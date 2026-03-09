@@ -306,6 +306,29 @@ class SkillLibrary:
             logger.error(f"获取技能名称失败: {e}")
             return []
 
+    async def load_demonstration(self, skill_json: dict, source: str = "manual") -> bool:
+        """
+        从演示/预置 JSON 加载技能并存储（不经过 LLM 抽象）。
+        用于模仿 MineDojo：用人类操作示范预置基础技能，Agent 从零开始时即可复用。
+
+        Args:
+            skill_json: 技能 JSON（格式同 abstract_from_trajectory 输出）
+            source: 来源标识，如 "demonstration" / "manual" / "youtube"
+
+        Returns:
+            是否存储成功
+        """
+        if not skill_json or not skill_json.get("skill_name"):
+            logger.warning("演示技能缺少 skill_name，跳过")
+            return False
+        try:
+            await self._store_skill(skill_json)
+            logger.info(f"演示技能已加载: {skill_json.get('skill_name')} (来源: {source})")
+            return True
+        except Exception as e:
+            logger.error(f"演示技能加载失败: {e}", exc_info=True)
+            return False
+
     @staticmethod
     def _format_trajectory(trajectory: list[dict]) -> str:
         lines = []

@@ -13,6 +13,7 @@ venv/
 minecraft_agent/data/chroma_db/
 minecraft_agent/logs/*.log
 minecraft_agent/logs/*.zip
+docs/
 
 # ── Java / Gradle ─────────────────────────────────────────
 mc_fabric_mod/build/

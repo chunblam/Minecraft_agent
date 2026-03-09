@@ -64,6 +64,16 @@ public class ServerEventHandler {
                 messageContent = signedMessage.getContent().getString();
             if (messageContent.isBlank()) return;
 
+            // 玩家输入「自主探索」时，仅推送 game_state_update 触发自主探索，不当作普通聊天
+            if (messageContent.trim().equals("自主探索")) {
+                JsonObject payload = new JsonObject();
+                payload.addProperty("type", "game_state_update");
+                payload.add("game_state", buildGameState(sender, server));
+                wsClient.sendToAgent(payload);
+                LOGGER.info("玩家 {} 触发自主探索", senderName);
+                return;
+            }
+
             LOGGER.info("玩家 {} 发送消息: {}", senderName, messageContent);
             PlayerContext.setCurrentPlayer(sender);
 
