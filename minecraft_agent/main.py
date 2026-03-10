@@ -11,13 +11,12 @@ main.py — Minecraft Agent 主入口（mineflayer 版）
   python main.py
 
 配置（环境变量）：
-  MC_HOST       Minecraft 服务器地址（默认 localhost）
-  MC_PORT       Minecraft 端口（默认 25565）
-  MC_USERNAME   Bot 用户名（默认 Agent）
-  MINEFLAYER_PORT  mineflayer HTTP server 端口（默认 3000）
-  LLM_API_KEY   OpenAI/Claude API Key
-  LLM_BASE_URL  API Base URL（可选）
-  LLM_MODEL     模型名称（默认 gpt-4o-mini）
+  MC_HOST          Minecraft 服务器地址（默认 localhost）
+  MC_PORT          Minecraft 端口（默认 25565）
+  MC_USERNAME      Bot 用户名（默认 Agent）
+  MINEFLAYER_PORT  mineflayer HTTP 服务端口（默认 3000）
+  DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL / DEEPSEEK_V3_MODEL
+                   由 llm_router 读取，用于所有 LLM 调用
 """
 
 import asyncio
@@ -38,8 +37,6 @@ MC_HOST = os.getenv("MC_HOST", "localhost")
 MC_PORT = int(os.getenv("MC_PORT", "25565"))
 MC_USERNAME = os.getenv("MC_USERNAME", "Agent")
 MINEFLAYER_PORT = int(os.getenv("MINEFLAYER_PORT", "3000"))
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
-
 
 async def main():
     logger.info("=" * 60)
@@ -47,14 +44,20 @@ async def main():
     logger.info("=" * 60)
 
     # ── 初始化各模块 ────────────────────────────────────────────────────────
-    llm = LLMRouter(
-        fast_model=LLM_MODEL,
-        api_key=os.getenv("LLM_API_KEY"),
-        base_url=os.getenv("LLM_BASE_URL"),
-    )
+    # LLMRouter 从环境变量 DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL / DEEPSEEK_V3_MODEL 读取配置
+    llm = LLMRouter()
     memory = MemoryManager()
     skill_lib = SkillLibrary(llm=llm, persist_dir="./skill_db")
     personality = PersonalitySystem()
+
+    # RAG 知识库（可选）：若已运行 load_knowledge_base.py 且 ChromaDB 存在，则任务拆解/执行会注入 MC 文档
+    retriever = None
+    try:
+        from rag.retriever import RAGRetriever
+        retriever = RAGRetriever()
+        logger.info("RAG 知识库已启用，任务执行将参考知识库文档")
+    except Exception as e:
+        logger.debug(f"RAG 未启用（可忽略）: {e}")
 
     # ── 初始化 mineflayer 环境 ───────────────────────────────────────────────
     env = MineflayerEnv(
@@ -80,6 +83,7 @@ async def main():
         memory=memory,
         skill_lib=skill_lib,
         personality=personality,
+        retriever=retriever,
     )
 
     # ── 主循环：监听 bot 接收到的聊天消息 ────────────────────────────────────

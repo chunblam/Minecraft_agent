@@ -259,6 +259,18 @@ class VoyagerAgent:
 
     async def _build_context(self, task: str, game_state: dict) -> str:
         parts = []
+        # RAG 知识库：注入与任务相关的 MC 文档（合成表、机制等），减少幻觉、补全模型知识
+        if self.retriever:
+            try:
+                rag_results = await self.retriever.search(task, top_k=3)
+                if rag_results:
+                    parts.append("Reference (knowledge base):")
+                    for r in rag_results:
+                        content = (r.get("content") or "")[:600].strip()
+                        if content:
+                            parts.append(f"- {content}")
+            except Exception:
+                pass
         try:
             skills = await self.skill_lib.search_skill(task, top_k=2)
             if skills:
