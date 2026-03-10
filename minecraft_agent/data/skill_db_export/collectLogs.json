@@ -1,0 +1,16 @@
+{
+  "name": "collectLogs",
+  "description": "Collects a specified number of logs of a given type by mining or exploring if needed.",
+  "code": "async function collectLogs(bot, params = {}) {\n    const { logType = \"oak_log\", quantity = 5 } = params;\n    \n    // Check current inventory\n    const logsInInventory = bot.inventory.items().filter(item => item.name === logType).reduce((sum, item) => sum + item.count, 0);\n    if (logsInInventory >= quantity) {\n        bot.chat(`Already have enough ${logType}s`);\n        return;\n    }\n\n    bot.chat(`Starting to collect ${logType}s`);\n    const logsNeeded = quantity - logsInInventory;\n    \n    // Try mining first\n    try {\n        await mineBlock(bot, logType, logsNeeded);\n    } catch (err) {\n        bot.chat(`Couldn't pathfind to ${logType}s, trying to explore nearby`);\n        // If mining fails, explore north/south/east/west randomly\n        const directions = [\"north\", \"south\", \"east\", \"west\"];\n        const randomDir = directions[Math.floor(Math.random() * directions.length)];\n        await exploreUntil(bot, randomDir, 16, () => {\n            return bot.findNearbyBlocks(logType, 32).length > 0;\n        });\n        // Try mining again after exploration\n        await mineBlock(bot, logType, logsNeeded);\n    }\n    \n    await pickupNearbyItems(bot);\n    \n    // Verify final count\n    const finalCount = bot.inventory.items().filter(item => item.name === logType).reduce((sum, item) => sum + item.count, 0);\n    if (finalCount >= quantity) {\n        bot.chat(`Successfully collected ${finalCount} ${logType}s`);\n    } else {\n        bot.chat(`Only collected ${finalCount} ${logType}s, need more`);\n    }\n}",
+  "parameters": {
+    "logType": "Type of log to collect (default: oak_log)",
+    "quantity": "Number of logs to collect (default: 5)"
+  },
+  "preconditions": [
+    "Bot must have an axe equipped or in inventory",
+    "Bot must have inventory space"
+  ],
+  "reliability_score": 1.0,
+  "success_count": 1,
+  "fail_count": 0
+}

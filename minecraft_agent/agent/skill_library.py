@@ -1,29 +1,23 @@
 """
-技能库 v2（Refactored）
+SkillLibrary v3 — Voyager 代码技能版
 
-核心变更：
-1. 技能只在 Critic 验证成功后才存储 —— 保证质量
-2. 技能格式加入 preconditions / postconditions / reliability_score
-3. 技能检索返回置信度分数，低分技能不使用
-4. 加入技能可靠性追踪（成功/失败次数），自动降级失效技能
-
-技能存储格式（改进后）：
+技能存储格式（改为 JS 函数代码，与 Voyager SkillManager 对等）：
 {
   "name": "chop_wood",
-  "description": "在指定范围内找到并采集指定数量的木头",
-  "parameters": {"block_type": "oak_log", "count": 5, "radius": 24},
-  "preconditions": ["有斧头或手（工具已装备）"],
-  "steps": [
-    {"action": "find_resource", "params": {"type": "{{block_type}}", "radius": "{{radius}}"}, "description": "找到最近的木头"},
-    {"action": "move_to", "params": {"region_center": "{{first_result}}", "radius": 2}, "description": "走到木头旁边"},
-    {"action": "mine_block", "params": {"x": "{{x}}", "y": "{{y}}", "z": "{{z}}"}, "description": "挖掘木头"}
-  ],
-  "postconditions": ["背包中有 {{count}} 个 {{block_type}}"],
-  "skill_type": "simple",
-  "reliability_score": 0.85,   # 0.0~1.0
-  "success_count": 17,
-  "fail_count": 3
+  "description": "在附近寻找并采集指定数量的木头",
+  "code": "async function chop_wood(bot, params = {}) { ... }",
+  "parameters": {"block_type": "oak_log", "count": 5},
+  "preconditions": ["附近有树木"],
+  "reliability_score": 0.9,
+  "success_count": 12,
+  "fail_count": 1
 }
+
+与 Voyager 的区别：
+  - ChromaDB 向量检索（与原版相同）
+  - 额外保存 reliability_score（Voyager 无此机制）
+  - 技能必须通过 Critic 验证后才存储（Voyager 无此过滤）
+  - 检索时返回 code 字符串，直接注入 LLM 的 Context
 """
 
 import json
@@ -31,9 +25,8 @@ import re
 from loguru import logger
 
 from .llm_router import LLMRouter
-from .prompts import SKILL_ABSTRACT_SYSTEM_PROMPT
+from .prompts import SKILL_CODE_SYSTEM_PROMPT, SKILL_CODE_HUMAN_TEMPLATE
 
-# ChromaDB（可选，不影响核心逻辑）
 try:
     import chromadb
     from chromadb.utils import embedding_functions
@@ -42,106 +35,109 @@ except ImportError:
     CHROMA_AVAILABLE = False
     logger.warning("[SkillLib] ChromaDB 未安装，使用内存技能库")
 
-
-MIN_RELIABILITY_SCORE = 0.4   # 低于此分数的技能不会被推荐使用
+MIN_RELIABILITY = 0.4
 
 
 class SkillLibrary:
     """
-    技能存储与检索。
-
-    重要规则：
-      - 只有 CriticAgent 验证成功的轨迹才可以存储技能
-      - 技能使用后根据结果更新 reliability_score
+    代码技能库。存储 JS 函数，检索时返回代码字符串供 LLM 使用。
     """
 
-    def __init__(self, llm: LLMRouter, persist_dir: str = "./skill_db"):
+    def __init__(self, llm: LLMRouter, persist_dir: str = "./data/skill_db"):
         self.llm = llm
         self.persist_dir = persist_dir
         self._collection = None
-        self._memory_store: dict[str, dict] = {}  # 内存回退
+        self._memory_store: dict[str, dict] = {}
 
         if CHROMA_AVAILABLE:
             try:
                 self._init_chroma(persist_dir)
             except Exception as e:
-                logger.warning(f"[SkillLib] ChromaDB 初始化失败: {e}，使用内存存储")
+                logger.warning(f"[SkillLib] ChromaDB 初始化失败: {e}")
 
-    # ── 技能抽象（仅在成功后调用）────────────────────────────────────────────
+    # ── 技能抽象（成功执行后调用）────────────────────────────────────────────
 
-    async def abstract_from_trajectory(
+    async def abstract_from_code(
         self,
         task: str,
-        trajectory: list[dict],
+        code: str,
+        output: str,
         verified_success: bool = False,
     ) -> dict | None:
         """
-        从执行轨迹中抽象技能。
+        从成功执行的 JS 代码中抽象可复用技能。
 
         Args:
-            task:              任务描述
-            trajectory:        步骤轨迹列表
-            verified_success:  必须为 True（Critic 验证后）才会存储
-
-        ⚠️ 如果 verified_success=False，只抽象但不存储。
+            task:             任务描述
+            code:             执行成功的 JS 函数代码
+            output:           执行输出（bot.chat 内容）
+            verified_success: True = Critic 验证通过，才存储
         """
-        if not trajectory:
+        if not code or not code.strip():
             return None
 
-        # 格式化轨迹
-        traj_text = self._format_trajectory(trajectory[:15])
-        user_prompt = f"Task: {task}\n\nExecution trajectory:\n{traj_text}\n\nExtract a reusable skill:"
+        logger.log("FLOW", f"SkillLib.abstract_from_code(task={task[:35]!r}, verified_success={verified_success})")
+        user_prompt = SKILL_CODE_HUMAN_TEMPLATE.format(
+            task=task,
+            code=code,
+            output=output[:500],
+        )
 
         raw = await self.llm.think_fast(
-            system_prompt=SKILL_ABSTRACT_SYSTEM_PROMPT,
+            system_prompt=SKILL_CODE_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             temperature=0.3,
         )
-
         if not raw:
             return None
 
         skill = self._parse_skill_json(raw)
-        if not skill:
+        if not skill or not skill.get("code"):
             logger.warning(f"[SkillLib] 技能解析失败: {raw[:100]}")
             return None
 
-        skill.setdefault("skill_type", "simple")
-        skill["reliability_score"] = 1.0  # 初始分数（经验证的成功）
-        skill["success_count"] = 1
-        skill["fail_count"] = 0
+        skill["reliability_score"] = 1.0
+        skill["success_count"]     = 1
+        skill["fail_count"]        = 0
 
         if verified_success:
             await self._store_skill(skill)
-            logger.info(f"[SkillLib] ✅ 技能已存储: {skill.get('name', '?')}")
-        else:
-            logger.debug(f"[SkillLib] 技能抽象完成但未存储（未经 Critic 验证）")
-
+            logger.info(f"[SkillLib] ✅ 技能已存储: {skill.get('name')}")
         return skill
 
-    # ── 技能检索 ─────────────────────────────────────────────────────────────
+    # ── 技能检索（返回代码字符串，直接注入 LLM）─────────────────────────────
 
-    async def search_skill(
-        self, query: str, top_k: int = 3, min_reliability: float = MIN_RELIABILITY_SCORE
+    async def search_skills(
+        self, query: str, top_k: int = 5
     ) -> list[dict]:
         """
-        检索相关技能，过滤掉低可靠性的技能。
-
-        Returns:
-            list of {"skill": dict, "score": float}，按相关度降序
+        检索相关技能。返回 [{"skill": dict, "score": float}]
         """
         if self._collection is not None:
-            return await self._chroma_search(query, top_k, min_reliability)
-        else:
-            return self._memory_search(query, top_k, min_reliability)
+            return await self._chroma_search(query, top_k)
+        return self._memory_search(query, top_k)
+
+    async def get_programs_string(self, query: str, top_k: int = 5) -> str:
+        """
+        返回格式化的技能代码字符串，直接注入到 CODE_GENERATION_HUMAN_TEMPLATE 的 context。
+        与 Voyager SkillManager.programs 属性对等。
+        """
+        logger.log("FLOW", f"SkillLib.get_programs_string(query={query[:40]!r}, top_k={top_k})")
+        results = await self.search_skills(query, top_k)
+        if not results:
+            return ""
+
+        lines = ["## Retrieved Skills (reuse these if applicable):\n"]
+        for r in results:
+            sk = r["skill"]
+            lines.append(f"// {sk.get('description', '')}")
+            lines.append(sk.get("code", ""))
+            lines.append("")
+        return "\n".join(lines)
 
     # ── 可靠性更新 ────────────────────────────────────────────────────────────
 
     async def update_reliability(self, skill_name: str, success: bool) -> None:
-        """
-        技能使用后根据结果更新可靠性分数。
-        使用指数移动平均：score = 0.8 * score + 0.2 * outcome
-        """
         skill = await self._get_skill(skill_name)
         if not skill:
             return
@@ -151,148 +147,160 @@ class SkillLibrary:
         else:
             skill["fail_count"] = skill.get("fail_count", 0) + 1
 
-        total = skill["success_count"] + skill["fail_count"]
+        total    = skill["success_count"] + skill["fail_count"]
         raw_rate = skill["success_count"] / total if total > 0 else 0.5
-        # 指数移动平均，保留历史权重
-        old_score = skill.get("reliability_score", 0.5)
-        skill["reliability_score"] = 0.7 * old_score + 0.3 * raw_rate
+        old      = skill.get("reliability_score", 0.5)
+        skill["reliability_score"] = 0.7 * old + 0.3 * raw_rate
 
-        await self._update_skill(skill)
-        logger.debug(
-            f"[SkillLib] 更新技能 '{skill_name}' 可靠性: {skill['reliability_score']:.2f} "
-            f"(成功={skill['success_count']}, 失败={skill['fail_count']})"
-        )
+        await self._store_skill(skill)
 
-    # ── 存储实现 ─────────────────────────────────────────────────────────────
+    # ── ChromaDB ─────────────────────────────────────────────────────────────
 
     def _init_chroma(self, persist_dir: str):
         client = chromadb.PersistentClient(path=persist_dir)
         ef = embedding_functions.DefaultEmbeddingFunction()
         self._collection = client.get_or_create_collection(
-            name="skills_v2",
+            name="skills_v3",
             embedding_function=ef,
             metadata={"hnsw:space": "cosine"},
         )
-        logger.info(f"[SkillLib] ChromaDB 已初始化，当前技能数: {self._collection.count()}")
+        logger.info(f"[SkillLib] ChromaDB 就绪，技能数: {self._collection.count()}")
 
-    async def _store_skill(self, skill: dict) -> None:
+    async def _store_skill(self, skill: dict):
         name = skill.get("name", "unnamed")
-        doc = json.dumps(skill, ensure_ascii=False)
+        doc  = json.dumps(skill, ensure_ascii=False)
 
         if self._collection is not None:
             try:
-                # 用 name 作为 ID，同名技能覆盖
+                # 用 description + code 作为 embedding 文本，让语义检索更准
+                embed_text = f"{skill.get('description', '')} {skill.get('code', '')[:500]}"
                 self._collection.upsert(
                     ids=[name],
-                    documents=[doc],
+                    documents=[embed_text],
                     metadatas=[{
-                        "skill_type": skill.get("skill_type", "simple"),
+                        "name": name,
+                        "description": skill.get("description", ""),
+                        "json": doc,
                         "reliability_score": skill.get("reliability_score", 1.0),
                     }],
                 )
+                return
             except Exception as e:
-                logger.warning(f"[SkillLib] ChromaDB 写入失败: {e}，回退内存")
-                self._memory_store[name] = skill
-        else:
-            self._memory_store[name] = skill
+                logger.warning(f"[SkillLib] ChromaDB 写入失败: {e}")
+        self._memory_store[name] = skill
 
-    async def _get_skill(self, skill_name: str) -> dict | None:
+    async def _get_skill(self, name: str) -> dict | None:
         if self._collection is not None:
             try:
-                result = self._collection.get(ids=[skill_name])
-                if result["documents"]:
-                    return json.loads(result["documents"][0])
+                r = self._collection.get(ids=[name])
+                if r["metadatas"]:
+                    meta = r["metadatas"][0]
+                    return json.loads(meta.get("json", "{}"))
             except Exception:
                 pass
-        return self._memory_store.get(skill_name)
+        return self._memory_store.get(name)
 
-    async def _update_skill(self, skill: dict) -> None:
-        await self._store_skill(skill)
-
-    async def _chroma_search(
-        self, query: str, top_k: int, min_reliability: float
-    ) -> list[dict]:
+    async def _chroma_search(self, query: str, top_k: int) -> list[dict]:
         if self._collection.count() == 0:
             return []
         try:
             results = self._collection.query(
                 query_texts=[query],
-                n_results=min(top_k * 2, self._collection.count()),
+                n_results=min(top_k, self._collection.count()),
             )
             output = []
-            for doc, meta, dist in zip(
-                results["documents"][0],
-                results["metadatas"][0],
-                results["distances"][0],
-            ):
+            for meta, dist in zip(results["metadatas"][0], results["distances"][0]):
                 reliability = meta.get("reliability_score", 1.0)
-                if reliability < min_reliability:
+                if reliability < MIN_RELIABILITY:
                     continue
                 try:
-                    skill = json.loads(doc)
+                    skill = json.loads(meta.get("json", "{}"))
                     score = max(0.0, 1.0 - dist)
                     output.append({"skill": skill, "score": score})
-                except json.JSONDecodeError:
+                except Exception:
                     continue
-            output.sort(key=lambda x: x["score"], reverse=True)
-            return output[:top_k]
+            return sorted(output, key=lambda x: x["score"], reverse=True)
         except Exception as e:
             logger.warning(f"[SkillLib] ChromaDB 查询失败: {e}")
             return []
 
-    def _memory_search(
-        self, query: str, top_k: int, min_reliability: float
-    ) -> list[dict]:
-        """内存模式：简单关键词匹配"""
+    def _memory_search(self, query: str, top_k: int) -> list[dict]:
         query_lower = query.lower()
         results = []
         for skill in self._memory_store.values():
-            if skill.get("reliability_score", 1.0) < min_reliability:
+            if skill.get("reliability_score", 1.0) < MIN_RELIABILITY:
                 continue
-            name = skill.get("name", "").lower()
-            desc = skill.get("description", "").lower()
-            score = 0.0
-            for word in query_lower.split():
-                if word in name:
-                    score += 0.5
-                if word in desc:
-                    score += 0.3
+            score = sum(
+                0.5 if w in skill.get("name", "").lower() else
+                0.3 if w in skill.get("description", "").lower() else 0
+                for w in query_lower.split()
+            )
             if score > 0:
                 results.append({"skill": skill, "score": score})
-        results.sort(key=lambda x: x["score"], reverse=True)
-        return results[:top_k]
-
-    # ── 工具方法 ─────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _format_trajectory(trajectory: list[dict]) -> str:
-        lines = []
-        for step in trajectory:
-            lines.append(
-                f"Step {step.get('step', '?')}: {step.get('action', '?')} "
-                f"| params={step.get('action_params', {})} "
-                f"| obs={step.get('observation', '')[:100]}"
-            )
-        return "\n".join(lines)
+        return sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]
 
     @staticmethod
     def _parse_skill_json(raw: str) -> dict | None:
         text = raw.strip()
         if "```" in text:
             lines = text.split("\n")
-            text = "\n".join(l for l in lines if not l.strip().startswith("```"))
+            text  = "\n".join(l for l in lines if not l.strip().startswith("```"))
         text = re.sub(r"[\x00-\x1f\x7f]", " ", text)
         text = re.sub(r",\s*}", "}", text)
-        text = re.sub(r",\s*]", "]", text)
-
+        text = re.sub(r",\s*]",  "]", text)
         match = re.search(r'\{.*\}', text, re.DOTALL)
         if match:
             text = match.group(0)
-
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             return None
+
+    def delete_skill(self, name: str) -> bool:
+        """
+        按名称删除一条技能。用于人工复核后剔除「Critic 通过但实际效果不佳」的技能。
+        返回 True 表示已删除，False 表示未找到或删除失败。
+        """
+        if not name or not name.strip():
+            return False
+        name = name.strip()
+        if self._collection is not None:
+            try:
+                self._collection.delete(ids=[name])
+                logger.info(f"[SkillLib] 已删除技能: {name}")
+                return True
+            except Exception as e:
+                logger.warning(f"[SkillLib] 删除技能失败 {name}: {e}")
+                return False
+        if name in self._memory_store:
+            del self._memory_store[name]
+            logger.info(f"[SkillLib] 已从内存删除技能: {name}")
+            return True
+        return False
+
+    def list_all_skills(self) -> list[dict]:
+        """
+        列出当前技能库中全部技能（用于导出、人工复核）。返回 [{"name", "description", "code", ...}, ...]。
+        """
+        out = []
+        if self._collection is not None:
+            try:
+                if self._collection.count() == 0:
+                    return []
+                data = self._collection.get(include=["metadatas"])
+                for meta in (data.get("metadatas") or []):
+                    if not meta:
+                        continue
+                    try:
+                        sk = json.loads(meta.get("json", "{}"))
+                        if sk.get("name") or sk.get("code"):
+                            out.append(sk)
+                    except Exception:
+                        continue
+            except Exception as e:
+                logger.warning(f"[SkillLib] list_all 失败: {e}")
+            return out
+        return list(self._memory_store.values())
 
     @property
     def skill_count(self) -> int:

@@ -1,242 +1,436 @@
 /**
- * 控制原语（Control Primitives）
+ * 控制原语 v3（Voyager 对等版）
  *
- * 参照 Voyager control_primitives，注入到 bot 对象上，
- * 提供高级、带错误处理的操作封装。
+ * 参照 Voyager control_primitives_context，注入到 bot 对象上。
+ * LLM 生成的 JS 函数直接调用这些原语，无需知道底层 mineflayer API。
  *
- * 注入后可用：
- *   bot.mineBlock(name, count)
- *   bot.craftItem(name, count)
- *   bot.smeltItem(name, fuel, count)
+ * 注入后可用（与 Voyager 原版保持一致的命名）：
+ *   await mineBlock(bot, name, count)
+ *   await craftItem(bot, name, count)
+ *   await smeltItem(bot, name, fuel, count)
+ *   await placeItem(bot, name, position)
+ *   await killMob(bot, name, timeout)
+ *   await pickupNearbyItems(bot)
+ *   await moveToPosition(bot, x, y, z, minDistance)
+ *   await exploreUntil(bot, direction, maxDistance, callback)
+ *   await equipItem(bot, name, destination)
+ *   await eatFood(bot)
+ *   await sleep(bot, bedPosition)
+ *   await activateNearestBlock(bot, name)
+ *   await interactWithEntity(bot, name, action)
+ *   await waitForMobRemoved(bot, mobName, radius, timeout)
+ *   await depositToChest(bot, chestPosition, itemsToDeposit)
+ *   await withdrawFromChest(bot, chestPosition, itemsToWithdraw)
+ *   bot.inventoryUsed()
  *   bot.findNearbyBlocks(name, radius, maxCount)
  *   bot.scanNearby(radius)
- *   bot.exploreUntil(direction, maxTime, callback)
- *   bot.inventoryUsed()
- *   bot.placeBlock(pos, blockName)    ← 覆盖原版，先走到再放
  */
 
 "use strict";
 
-const { goals: { GoalNear, GoalNearXZ, GoalGetToBlock, GoalLookAtBlock } } = require("mineflayer-pathfinder");
+const { goals: {
+    GoalNear, GoalNearXZ, GoalGetToBlock, GoalLookAtBlock, GoalFollow
+}} = require("mineflayer-pathfinder");
 const Vec3 = require("vec3").Vec3;
 
 function inject(bot, mcData) {
 
-    // ── inventoryUsed ────────────────────────────────────────────────────────
-    bot.inventoryUsed = () => {
-        return bot.inventory.slots.slice(9, 45).filter(i => i !== null).length;
+    // ─────────────────────────────────────────────────────────────────────────
+    // 工具方法
+    // ─────────────────────────────────────────────────────────────────────────
+
+    bot.inventoryUsed = () =>
+        bot.inventory.slots.slice(9, 45).filter(i => i !== null).length;
+
+    bot.findNearbyBlocks = (name, radius = 32, maxCount = 10) => {
+        const cleanName = name.replace("minecraft:", "");
+        const blockDef = mcData.blocksByName[cleanName];
+        if (!blockDef) return [];
+        const positions = bot.findBlocks({ matching: [blockDef.id], maxDistance: radius, count: maxCount });
+        return positions.map(p => ({ x: p.x, y: p.y, z: p.z }));
     };
 
-    // ── mineBlock ────────────────────────────────────────────────────────────
-    /**
-     * 找到并挖掘最近的 count 个指定方块。
-     * 会自动寻路靠近每个方块。
-     */
-    bot.mineBlock = async (name, count = 1) => {
-        const blockDef = mcData.blocksByName[name];
-        if (!blockDef) throw new Error(`未知方块: ${name}`);
+    bot.scanNearby = (radius = 24) => {
+        const counts = {};
+        const pos = bot.entity.position;
+        for (let dx = -radius; dx <= radius; dx += 2)
+        for (let dy = -8;      dy <= 8;      dy += 2)
+        for (let dz = -radius; dz <= radius; dz += 2) {
+            const b = bot.blockAt(pos.offset(dx, dy, dz));
+            if (b && b.name !== "air" && b.name !== "cave_air")
+                counts[b.name] = (counts[b.name] || 0) + 1;
+        }
+        return counts;
+    };
 
-        const blocks = bot.findBlocks({
-            matching: [blockDef.id],
-            maxDistance: 32,
-            count: count * 3,  // 多找一些以防有的到不了
+    // ─────────────────────────────────────────────────────────────────────────
+    // ★ mineBlock — 寻路 + 挖掘 N 个指定方块
+    // ─────────────────────────────────────────────────────────────────────────
+    bot.mineBlock = async (name, count = 1) => {
+        const cleanName = name.replace("minecraft:", "");
+        const blockDef = mcData.blocksByName[cleanName];
+        if (!blockDef) throw new Error(`未知方块: ${cleanName}`);
+
+        let mined = 0;
+        while (mined < count) {
+            const positions = bot.findBlocks({
+                matching: [blockDef.id],
+                maxDistance: 32,
+                count: (count - mined) * 2 + 2,
+            });
+            if (positions.length === 0) {
+                bot.chat(`附近没有更多 ${cleanName}`);
+                break;
+            }
+            const targets = positions
+                .slice(0, count - mined)
+                .map(p => bot.blockAt(p))
+                .filter(Boolean);
+            try {
+                await bot.collectBlock.collect(targets, { ignoreNoPath: true, count: count - mined });
+                mined += targets.length;
+            } catch (err) {
+                bot.chat(`挖掘 ${cleanName} 时出错: ${err.message}`);
+                break;
+            }
+        }
+        bot.chat(`已挖掘 ${mined} 个 ${cleanName}`);
+    };
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ★ craftItem — 自动寻找工作台合成
+    // ─────────────────────────────────────────────────────────────────────────
+    bot.craftItem = async (name, count = 1) => {
+        const cleanName = name.replace("minecraft:", "");
+        const item = mcData.itemsByName[cleanName];
+        if (!item) throw new Error(`未知物品: ${cleanName}`);
+
+        // 先尝试不用工作台（2x2）
+        let recipes = bot.recipesFor(item.id, null, 1, null);
+        let table = null;
+
+        if (recipes.length === 0) {
+            // 需要工作台（3x3）
+            const tablePositions = bot.findBlocks({
+                matching: [mcData.blocksByName["crafting_table"].id],
+                maxDistance: 32, count: 1,
+            });
+            if (tablePositions.length === 0) {
+                // 没有工作台，尝试先放置一个
+                const tableItem = bot.inventory.items().find(i => i.name === "crafting_table");
+                if (tableItem) {
+                    const placePos = bot.entity.position.offset(1, 0, 0).floored();
+                    await bot.pathfinder.goto(new GoalNear(placePos.x, placePos.y, placePos.z, 2));
+                    await bot.equip(tableItem, "hand");
+                    const refBlock = bot.blockAt(placePos.offset(0, -1, 0));
+                    if (refBlock) await bot._placeBlock(refBlock, new Vec3(0, 1, 0));
+                    await bot.waitForTicks(5);
+                } else {
+                    throw new Error(`合成 ${cleanName} 需要工作台，但附近没有且背包中也没有`);
+                }
+            }
+            const tablePos = bot.findBlocks({ matching: [mcData.blocksByName["crafting_table"].id], maxDistance: 32, count: 1 });
+            if (tablePos.length > 0) {
+                table = bot.blockAt(tablePos[0]);
+                await bot.pathfinder.goto(new GoalGetToBlock(table.position.x, table.position.y, table.position.z));
+            }
+            recipes = bot.recipesFor(item.id, null, 1, table);
+        }
+
+        if (recipes.length === 0) throw new Error(`没有合成配方: ${cleanName}`);
+
+        await bot.craft(recipes[0], count, table);
+        bot.chat(`已合成 ${count} 个 ${cleanName}`);
+    };
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ★ smeltItem — 熔炉冶炼
+    // ─────────────────────────────────────────────────────────────────────────
+    bot.smeltItem = async (name, fuel = "coal", count = 1) => {
+        const cleanName = name.replace("minecraft:", "");
+        const cleanFuel = fuel.replace("minecraft:", "");
+
+        // 找熔炉
+        const furnacePositions = bot.findBlocks({
+            matching: [mcData.blocksByName["furnace"].id],
+            maxDistance: 32, count: 1,
+        });
+        if (furnacePositions.length === 0) throw new Error("附近没有熔炉");
+
+        const furnaceBlock = bot.blockAt(furnacePositions[0]);
+        await bot.pathfinder.goto(new GoalGetToBlock(furnaceBlock.position.x, furnaceBlock.position.y, furnaceBlock.position.z));
+
+        const furnace = await bot.openFurnace(furnaceBlock);
+
+        // 放入原材料
+        const inputItem = bot.inventory.items().find(i => i.name === cleanName);
+        if (!inputItem) { furnace.close(); throw new Error(`背包中没有 ${cleanName}`); }
+        await furnace.putInput(inputItem.type, null, count);
+
+        // 放入燃料
+        const fuelItem = bot.inventory.items().find(i => i.name === cleanFuel);
+        if (!fuelItem) { furnace.close(); throw new Error(`背包中没有燃料 ${cleanFuel}`); }
+        await furnace.putFuel(fuelItem.type, null, Math.ceil(count / 8) + 1);
+
+        // 等待冶炼完成
+        await new Promise((resolve) => {
+            const check = setInterval(async () => {
+                if (furnace.outputItem()) {
+                    await furnace.takeOutput();
+                    clearInterval(check);
+                    furnace.close();
+                    resolve();
+                }
+            }, 1000);
+            setTimeout(() => { clearInterval(check); furnace.close(); resolve(); }, count * 12000 + 5000);
         });
 
-        if (blocks.length === 0) {
-            bot.chat(`附近没有 ${name}，需要先探索`);
+        bot.chat(`已冶炼 ${count} 个 ${cleanName}`);
+    };
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ★ placeItem — 在指定位置放置方块
+    // ─────────────────────────────────────────────────────────────────────────
+    bot._placeBlock = bot.placeBlock;
+    bot.placeItem = async (name, position) => {
+        const cleanName = name.replace("minecraft:", "");
+        const item = bot.inventory.items().find(i => i.name === cleanName);
+        if (!item) throw new Error(`背包中没有 ${cleanName}`);
+
+        await bot.pathfinder.goto(new GoalNear(position.x, position.y, position.z, 3));
+        await bot.equip(item, "hand");
+
+        const refBlock = bot.blockAt(new Vec3(position.x, position.y - 1, position.z));
+        if (!refBlock) throw new Error("无法找到放置面");
+        await bot._placeBlock(refBlock, new Vec3(0, 1, 0));
+        bot.chat(`已放置 ${cleanName} 在 (${position.x},${position.y},${position.z})`);
+    };
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ★ killMob — 寻找并击杀指定怪物
+    // ─────────────────────────────────────────────────────────────────────────
+    bot.killMob = async (name, timeout = 300) => {
+        const cleanName = name.replace("minecraft:", "").toLowerCase();
+        const startTime = Date.now();
+
+        while (Date.now() - startTime < timeout * 1000) {
+            const mob = bot.nearestEntity(e => {
+                const en = (e.name || "").toLowerCase();
+                return (en === cleanName || en.includes(cleanName)) &&
+                       e.position.distanceTo(bot.entity.position) < 48;
+            });
+
+            if (!mob) {
+                bot.chat(`附近没有 ${cleanName}，尝试探索...`);
+                // 随机方向探索
+                const dirs = ["north", "south", "east", "west"];
+                const dir  = dirs[Math.floor(Math.random() * dirs.length)];
+                await bot.exploreUntil(dir, 64, () =>
+                    bot.nearestEntity(e => (e.name || "").toLowerCase().includes(cleanName))
+                );
+                continue;
+            }
+
+            await bot.pathfinder.goto(new GoalFollow(mob, 2));
+            bot.pvp.attack(mob);
+
+            await new Promise((resolve) => {
+                const check = setInterval(() => {
+                    if (!mob.isValid || mob.health <= 0) {
+                        clearInterval(check);
+                        bot.pvp.stop();
+                        resolve();
+                    }
+                }, 500);
+                setTimeout(() => { clearInterval(check); bot.pvp.stop(); resolve(); }, 30000);
+            });
+
+            bot.chat(`已击杀 ${cleanName}`);
+            await pickupNearbyItems(bot);
             return;
         }
 
-        const targets = blocks.slice(0, count).map(p => bot.blockAt(p)).filter(Boolean);
-        await bot.collectBlock.collect(targets, { ignoreNoPath: true, count });
-        bot.chat(`已挖掘 ${Math.min(targets.length, count)} 个 ${name}`);
+        throw new Error(`击杀 ${cleanName} 超时`);
     };
 
-    // ── craftItem ────────────────────────────────────────────────────────────
-    /**
-     * 合成指定物品。
-     * 会自动寻找附近工作台（如果配方需要的话）。
-     */
-    bot.craftItem = async (name, count = 1) => {
-        const item = mcData.itemsByName[name];
-        if (!item) throw new Error(`未知物品: ${name}`);
+    // ─────────────────────────────────────────────────────────────────────────
+    // ★ equipItem — 装备物品
+    // ─────────────────────────────────────────────────────────────────────────
+    bot.equipItem = async (name, destination = "hand") => {
+        const cleanName = name.replace("minecraft:", "");
+        const item = bot.inventory.items().find(i => i.name === cleanName);
+        if (!item) throw new Error(`背包中没有 ${cleanName}`);
+        await bot.equip(item, destination);
+        bot.chat(`已装备 ${cleanName} 到 ${destination}`);
+    };
 
-        // 找工作台
-        const tableBlock = bot.findBlock({
-            matching: mcData.blocksByName.crafting_table.id,
-            maxDistance: 32,
-        });
+    // ─────────────────────────────────────────────────────────────────────────
+    // ★ eatFood — 自动吃食物（按饱腹度排序）
+    // ─────────────────────────────────────────────────────────────────────────
+    bot.eatFood = async () => {
+        const foodItems = bot.inventory.items().filter(i => mcData.itemsByName[i.name]?.foodPoints > 0);
+        if (foodItems.length === 0) throw new Error("背包中没有食物");
 
-        if (tableBlock) {
-            await bot.pathfinder.goto(new GoalLookAtBlock(tableBlock.position, bot.world));
+        // 选饱腹度最高的食物
+        foodItems.sort((a, b) =>
+            (mcData.itemsByName[b.name]?.foodPoints || 0) - (mcData.itemsByName[a.name]?.foodPoints || 0)
+        );
+        const food = foodItems[0];
+        await bot.equip(food, "hand");
+        await bot.consume();
+        bot.chat(`已吃了 ${food.name}，饥饿度 +${mcData.itemsByName[food.name]?.foodPoints || "?"}`);
+    };
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ★ pickupNearbyItems — 捡起附近掉落物
+    // ─────────────────────────────────────────────────────────────────────────
+    bot.pickupNearbyItems = async () => {
+        const items = Object.values(bot.entities).filter(
+            e => e.type === "object" && e.objectType === "Item" &&
+                 e.position.distanceTo(bot.entity.position) < 8
+        );
+        for (const item of items) {
+            await bot.pathfinder.goto(new GoalNear(item.position.x, item.position.y, item.position.z, 1));
         }
-
-        const recipe = bot.recipesFor(item.id, null, 1, tableBlock)[0];
-        if (!recipe) throw new Error(`没有 ${name} 的合成配方（检查材料是否足够）`);
-
-        await bot.craft(recipe, count, tableBlock);
-        bot.chat(`合成了 ${count} 个 ${name}`);
     };
 
-    // ── smeltItem ────────────────────────────────────────────────────────────
-    /**
-     * 在附近熔炉中熔炼物品。
-     */
-    bot.smeltItem = async (itemName, fuelName = "coal", count = 1) => {
-        const item = mcData.itemsByName[itemName];
-        const fuel = mcData.itemsByName[fuelName];
-        if (!item) throw new Error(`未知物品: ${itemName}`);
-        if (!fuel) throw new Error(`未知燃料: ${fuelName}`);
-
-        const furnaceBlock = bot.findBlock({
-            matching: mcData.blocksByName.furnace.id,
-            maxDistance: 32,
-        });
-        if (!furnaceBlock) throw new Error("附近没有熔炉，请先放置一个");
-
-        await bot.pathfinder.goto(new GoalLookAtBlock(furnaceBlock.position, bot.world));
-        const furnace = await bot.openFurnace(furnaceBlock);
-
-        let smelted = 0;
-        for (let i = 0; i < count; i++) {
-            if (!bot.inventory.findInventoryItem(item.id, null)) {
-                bot.chat(`背包中没有 ${itemName} 了`);
-                break;
-            }
-            // 补充燃料
-            if (furnace.fuelSeconds < 15) {
-                if (!bot.inventory.findInventoryItem(fuel.id, null)) {
-                    throw new Error(`背包中没有燃料 ${fuelName}`);
-                }
-                await furnace.putFuel(fuel.id, null, 1);
-                await bot.waitForTicks(20);
-            }
-            await furnace.putInput(item.id, null, 1);
-            await bot.waitForTicks(12 * 20);  // 等待熔炼（约12秒）
-            if (furnace.outputItem()) {
-                await furnace.takeOutput();
-                smelted++;
-            }
-        }
-        furnace.close();
-        bot.chat(`熔炼了 ${smelted} 个 ${itemName}`);
+    // ─────────────────────────────────────────────────────────────────────────
+    // ★ moveToPosition — 寻路到指定坐标
+    // ─────────────────────────────────────────────────────────────────────────
+    bot.moveToPosition = async (x, y, z, minDistance = 2) => {
+        await bot.pathfinder.goto(new GoalNear(x, y, z, minDistance));
+        bot.chat(`已到达 (${Math.round(x)},${Math.round(y)},${Math.round(z)}) 附近`);
     };
 
-    // ── findNearbyBlocks ──────────────────────────────────────────────────────
-    /**
-     * 找到附近的指定方块，返回坐标列表（按距离排序）。
-     */
-    bot.findNearbyBlocks = (name, radius = 32, maxCount = 10) => {
-        const blockName = name.replace("minecraft:", "");
-        const blockDef = mcData.blocksByName[blockName];
-        if (!blockDef) return [];
-
-        const blocks = bot.findBlocks({
-            matching: blockDef.id,
-            maxDistance: radius,
-            count: maxCount,
-        });
-
-        return blocks.map(p => ({
-            x: p.x, y: p.y, z: p.z,
-            distance: parseFloat(p.distanceTo(bot.entity.position).toFixed(1)),
-        })).sort((a, b) => a.distance - b.distance);
-    };
-
-    // ── scanNearby ────────────────────────────────────────────────────────────
-    /**
-     * 扫描附近环境，返回可读的文字摘要。
-     */
-    bot.scanNearby = (radius = 24) => {
-        const pos = bot.entity.position;
-        const found = new Map();
-
-        const IMPORTANT = [
-            "oak_log", "birch_log", "spruce_log", "jungle_log", "acacia_log", "dark_oak_log",
-            "diamond_ore", "iron_ore", "coal_ore", "gold_ore", "deepslate_diamond_ore",
-            "deepslate_iron_ore", "water", "lava", "chest", "crafting_table", "furnace",
-            "iron_block", "diamond_block", "sand", "gravel",
-        ];
-
-        for (const name of IMPORTANT) {
-            const def = mcData.blocksByName[name];
-            if (!def) continue;
-            const blocks = bot.findBlocks({ matching: def.id, maxDistance: radius, count: 3 });
-            if (blocks.length > 0) {
-                const nearest = blocks[0];
-                found.set(name, {
-                    count: blocks.length,
-                    nearest: `(${nearest.x},${nearest.y},${nearest.z})`,
-                    dist: parseFloat(nearest.distanceTo(pos).toFixed(1)),
-                });
-            }
-        }
-
-        if (found.size === 0) return `${radius}格内无特殊资源`;
-        const parts = [];
-        for (const [name, info] of found) {
-            parts.push(`${name} x${info.count}（最近=${info.nearest}，距离=${info.dist}格）`);
-        }
-        return parts.join("；");
-    };
-
-    // ── exploreUntil ──────────────────────────────────────────────────────────
-    /**
-     * 参照 Voyager exploreUntil。
-     * 朝指定方向探索，直到 callback 返回非 null 或超时。
-     */
-    bot.exploreUntil = (direction, maxTime = 60, callback = () => null) => {
-        // 快速检查
-        const test = callback();
-        if (test) return Promise.resolve(test);
+    // ─────────────────────────────────────────────────────────────────────────
+    // ★ exploreUntil — 朝某方向移动，直到 callback 返回真值
+    // ─────────────────────────────────────────────────────────────────────────
+    bot.exploreUntil = async (direction, maxDistance = 64, callback = null) => {
+        const dirMap = { north: [0,0,-1], south: [0,0,1], east: [1,0,0], west: [-1,0,0] };
+        const d = dirMap[direction] || dirMap.north;
 
         return new Promise((resolve) => {
+            let traveled = 0;
+            const step = 8;
             let interval, timeout;
 
-            const cleanup = () => {
-                clearInterval(interval);
-                clearTimeout(timeout);
-                bot.pathfinder.setGoal(null);
-            };
+            const cleanup = () => { clearInterval(interval); clearTimeout(timeout); };
 
-            const explore = () => {
-                const rand = () => Math.floor(Math.random() * 30 + 15);
-                const target = bot.entity.position.plus(direction.scaled(rand()));
-                const goal = direction.y === 0
-                    ? new GoalNearXZ(target.x, target.z)
-                    : new GoalNear(target.x, target.y, target.z, 5);
+            const move = async () => {
+                if (traveled >= maxDistance) { cleanup(); resolve(null); return; }
+                const pos = bot.entity.position;
+                const target = new Vec3(pos.x + d[0] * step, pos.y, pos.z + d[2] * step);
+                const goal = new GoalNearXZ(target.x, target.z);
                 bot.pathfinder.setGoal(goal, true);
+                traveled += step;
 
-                try {
-                    const result = callback();
-                    if (result) { cleanup(); bot.chat("探索成功！"); resolve(result); }
-                } catch (_) { cleanup(); resolve(null); }
+                if (callback) {
+                    try {
+                        const result = callback();
+                        if (result) { cleanup(); bot.chat("探索成功"); resolve(result); }
+                    } catch (_) {}
+                }
             };
 
-            interval = setInterval(explore, 2000);
-            timeout = setTimeout(() => {
-                cleanup();
-                bot.chat("探索超时");
-                resolve(null);
-            }, maxTime * 1000);
+            interval = setInterval(move, 2000);
+            timeout  = setTimeout(() => { cleanup(); bot.chat("探索超时"); resolve(null); }, maxDistance * 500);
+            move();
         });
     };
 
-    // ── placeBlock (增强版) ───────────────────────────────────────────────────
-    bot._placeBlock = bot.placeBlock;
-    bot.placeBlock = async (targetPos, blockName) => {
-        const item = bot.inventory.items().find(i => i.name === blockName);
-        if (!item) throw new Error(`背包中没有 ${blockName}`);
+    // ─────────────────────────────────────────────────────────────────────────
+    // ★ activateNearestBlock — 右键点击最近的指定方块
+    // ─────────────────────────────────────────────────────────────────────────
+    bot.activateNearestBlock = async (name) => {
+        const cleanName = name.replace("minecraft:", "");
+        const blockDef  = mcData.blocksByName[cleanName];
+        if (!blockDef) throw new Error(`未知方块: ${cleanName}`);
 
-        await bot.equip(item, "hand");
-        const faceBlock = bot.blockAt(targetPos.offset(0, -1, 0));
-        if (!faceBlock) throw new Error("无法找到放置面");
+        const pos = bot.findBlock({ matching: blockDef.id, maxDistance: 32 });
+        if (!pos) throw new Error(`附近没有 ${cleanName}`);
 
-        await bot.pathfinder.goto(new GoalNear(targetPos.x, targetPos.y, targetPos.z, 3));
-        await bot._placeBlock(faceBlock, new Vec3(0, 1, 0));
+        const block = bot.blockAt(pos);
+        await bot.pathfinder.goto(new GoalGetToBlock(block.position.x, block.position.y, block.position.z));
+        await bot.activateBlock(block);
+        bot.chat(`已激活 ${cleanName}`);
     };
 
-    console.log("[Primitives] 控制原语注入完毕");
+    // ─────────────────────────────────────────────────────────────────────────
+    // ★ depositToChest / withdrawFromChest
+    // ─────────────────────────────────────────────────────────────────────────
+    bot.depositToChest = async (chestPosition, itemsToDeposit) => {
+        // itemsToDeposit: [{name, count}]
+        const chestBlock = bot.blockAt(new Vec3(chestPosition.x, chestPosition.y, chestPosition.z));
+        if (!chestBlock) throw new Error("箱子不存在");
+
+        await bot.pathfinder.goto(new GoalNear(chestPosition.x, chestPosition.y, chestPosition.z, 2));
+        const chest = await bot.openChest(chestBlock);
+
+        for (const { name, count } of itemsToDeposit) {
+            const cleanName = name.replace("minecraft:", "");
+            const item = bot.inventory.items().find(i => i.name === cleanName);
+            if (item) {
+                await chest.deposit(item.type, null, Math.min(count || item.count, item.count));
+            }
+        }
+        chest.close();
+        bot.chat(`已存入物品到箱子`);
+    };
+
+    bot.withdrawFromChest = async (chestPosition, itemsToWithdraw) => {
+        const chestBlock = bot.blockAt(new Vec3(chestPosition.x, chestPosition.y, chestPosition.z));
+        if (!chestBlock) throw new Error("箱子不存在");
+
+        await bot.pathfinder.goto(new GoalNear(chestPosition.x, chestPosition.y, chestPosition.z, 2));
+        const chest = await bot.openChest(chestBlock);
+
+        for (const { name, count } of itemsToWithdraw) {
+            const cleanName = name.replace("minecraft:", "");
+            const item = chest.containerItems().find(i => i.name === cleanName);
+            if (item) {
+                await chest.withdraw(item.type, null, Math.min(count || item.count, item.count));
+            }
+        }
+        chest.close();
+        bot.chat(`已从箱子取出物品`);
+    };
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ★ waitForMobRemoved — 等待附近某类怪物消失
+    // ─────────────────────────────────────────────────────────────────────────
+    bot.waitForMobRemoved = async (mobName, radius = 32, timeout = 60) => {
+        const cleanName = mobName.replace("minecraft:", "").toLowerCase();
+        return new Promise((resolve) => {
+            const check = setInterval(() => {
+                const found = bot.nearestEntity(e =>
+                    (e.name || "").toLowerCase().includes(cleanName) &&
+                    e.position.distanceTo(bot.entity.position) < radius
+                );
+                if (!found) { clearInterval(check); clearTimeout(t); resolve(true); }
+            }, 1000);
+            const t = setTimeout(() => { clearInterval(check); resolve(false); }, timeout * 1000);
+        });
+    };
+
+    console.log("[Primitives] ✅ 控制原语 v3 注入完毕（Voyager 对等版）");
 }
 
-module.exports = { inject };
+// 导出独立函数供 LLM 生成代码调用（函数式风格，兼容 Voyager 写法）
+async function mineBlock(bot, name, count = 1)               { await bot.mineBlock(name, count); }
+async function craftItem(bot, name, count = 1)               { await bot.craftItem(name, count); }
+async function smeltItem(bot, name, fuel = "coal", count = 1){ await bot.smeltItem(name, fuel, count); }
+async function placeItem(bot, name, position)                { await bot.placeItem(name, position); }
+async function killMob(bot, name, timeout = 300)             { await bot.killMob(name, timeout); }
+async function pickupNearbyItems(bot)                        { await bot.pickupNearbyItems(); }
+async function moveToPosition(bot, x, y, z, minDist = 2)    { await bot.moveToPosition(x, y, z, minDist); }
+async function exploreUntil(bot, dir, maxDist, callback)     { return await bot.exploreUntil(dir, maxDist, callback); }
+async function equipItem(bot, name, dest = "hand")           { await bot.equipItem(name, dest); }
+async function eatFood(bot)                                  { await bot.eatFood(); }
+async function activateNearestBlock(bot, name)               { await bot.activateNearestBlock(name); }
+
+module.exports = {
+    inject,
+    mineBlock, craftItem, smeltItem, placeItem,
+    killMob, pickupNearbyItems, moveToPosition,
+    exploreUntil, equipItem, eatFood, activateNearestBlock,
+};

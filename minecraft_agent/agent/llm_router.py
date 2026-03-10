@@ -69,7 +69,7 @@ class LLMRouter:
     ) -> str:
         """底层 API 调用，带超时、耗时统计和错误处理。超时或异常时返回空字符串，避免长时间卡住。"""
         t0 = time.monotonic()
-        logger.info(f"[LLM] 请求中（超时 {int(LLM_CALL_TIMEOUT)}s）: {model}")
+        logger.info(f"[LLM] 请求中: {model}")
         try:
             response = await asyncio.wait_for(
                 self.client.chat.completions.create(

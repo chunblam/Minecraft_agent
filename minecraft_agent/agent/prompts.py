@@ -1,186 +1,186 @@
 """
-集中管理所有 Prompt。
+prompts.py v3 — Voyager 代码生成版
 
-设计原则（参考 Voyager）：
-1. 任务执行 prompt 不含角色扮演——只有清晰的技术指令
-2. 每个 prompt 目标单一，不塞入多余规则
-3. Critic prompt 专注于"任务是否完成"的客观判断
-4. 闲聊 prompt 保留人格，但与执行 prompt 完全分离
+核心设计：
+  CODE_GENERATION_SYSTEM_PROMPT — LLM 输出 async JS function（Voyager action_template 对等）
+  SKILL_CODE_SYSTEM_PROMPT      — 从成功执行中抽象可复用 JS 技能函数
+  CRITIC_SYSTEM_PROMPT          — 任务成功判断
+  PLANNER_SYSTEM_PROMPT         — 高层任务分解
+
+ReAct 在「代码生成」模式下的体现：
+  Reason → LLM 输出 Explain + Plan（自然语言推理）
+  Act    → 输出 Code（async JS function）→ /execute_code 执行
+  Observe → stdout output + error + game_state → 下一轮作为「Execution error / Chat log」传入
+  这与 Voyager iterative prompting 完全一致，额外加入了 RAG 上下文注入。
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Action Agent Prompts（任务执行，无角色扮演）
+# ★ 代码生成 System Prompt（Voyager action_template 对等版）
 # ─────────────────────────────────────────────────────────────────────────────
 
-ACTION_SYSTEM_PROMPT = """You are a Minecraft AI agent controller. Your job is to generate a single action step to progress toward the given task.
+CODE_GENERATION_SYSTEM_PROMPT = """You are a helpful assistant that writes Mineflayer JavaScript code to complete any Minecraft task.
 
-## Available Actions
-- move_to        : {"direction": "north", "distance": 48} OR {"region_center": [x,y,z], "radius": 2} OR {"x":10,"y":64,"z":-30}
-- mine_block     : {"x": 10, "y": 62, "z": -30}
-- place_block    : {"x": 10, "y": 64, "z": -30, "block": "minecraft:oak_fence"}
-- craft_item     : {"item": "minecraft:planks", "count": 4}
-- enchant_item   : {"slot": "mainhand", "enchantment": "minecraft:sharpness", "level": 3}
-- interact_entity: {"entity_type": "sheep", "action": "find"}
-- find_resource  : {"type": "oak_log", "radius": 32}
-- scan_area      : {"radius": 24}
-- get_inventory  : {}
-- look_around    : {"radius": 96}
-- chat           : {"message": "text"}
-- finish         : {"message": "task completion summary", "success": true}
+## Available Control Primitives
+These are already injected — always use them instead of raw mineflayer API calls:
 
-## Rules
-1. Output ONLY valid JSON, no extra text.
-2. Use coordinates from game_state.nearby_resources — never invent coordinates.
-3. If inventory already has required items, skip gathering steps.
-4. Check inventory BEFORE crafting.
-5. Diamond ore is at y <= 16. Iron ore is at y <= 64.
-6. move_to supports auto-pathfinding (obstacles, stairs, gaps).
-7. When a previous step FAILED, read the critique carefully and adjust.
+```javascript
+// 采集 & 合成 & 建造
+await mineBlock(bot, "oak_log", 4)               // 寻路+挖掘 N 个方块
+await craftItem(bot, "crafting_table", 1)         // 自动找/放工作台合成
+await smeltItem(bot, "iron_ingot", "coal", 3)     // 自动找熔炉冶炼
+await placeItem(bot, "crafting_table", {x,y,z})  // 放置方块
+await pickupNearbyItems(bot)                      // 捡起附近掉落物
 
-## Output Format
-{"thought": "reasoning in one sentence", "action": "action_type", "action_params": {...}, "is_final": false}
+// 移动 & 探索
+await moveToPosition(bot, x, y, z, minDist)      // 寻路到坐标（minDist 默认 2）
+await exploreUntil(bot, "north", 64, () => ...)  // 向指定方向探索直到 callback 返回真
 
-When task is complete:
-{"thought": "reasoning", "action": "finish", "action_params": {"message": "what was accomplished", "success": true}, "is_final": true}"""
+// 战斗
+await killMob(bot, "zombie", 300)                // 寻找并击杀怪物（timeout 秒）
 
+// 交互 & 生存
+await equipItem(bot, "iron_sword", "hand")        // 装备物品
+await eatFood(bot)                               // 自动选最佳食物吃
+await activateNearestBlock(bot, "chest")         // 右键最近指定方块
+```
 
-ACTION_HUMAN_TEMPLATE = """Task: {task}
+## 工具方法（同步）
+```javascript
+bot.inventoryUsed()                              // 已用格数 (number)
+bot.findNearbyBlocks("oak_log", 32, 10)         // 返回 [{x,y,z}] 坐标数组
+bot.scanNearby(24)                               // 返回 {blockName: count}
+bot.inventory.items()                            // 返回背包物品 [{name, count}]
+```
 
-Context: {context}
+## 编写规则
+1. 写一个名称有意义的 `async function taskFunctionName(bot)` 函数。
+2. **优先使用控制原语**，不要调用 bot.dig / bot.craft / bot.openFurnace 等底层 API。
+3. 函数必须通用：不硬编码坐标，用 bot.findNearbyBlocks 或 exploreUntil 发现资源。
+4. 用 `bot.chat(...)` 报告关键中间进度（这些内容会作为 observation 回传）。
+5. 背包里没有需要的物品时，先获取，不要假设已有。
+6. 不写无限循环，不用 `bot.on` / `bot.once`，不要写递归函数。
+7. 所有变量声明在函数内部。
+8. bot.findBlocks 的 maxDistance 始终设为 32。
+9. 需要工作台时：先检查背包 → 没有则 craftItem("crafting_table") → placeItem 放置。
+10. 探索时每次随机选不同方向。
 
-Game State:
-{game_state}
+## 响应格式（严格遵守，缺一不可）
 
-Previous Steps:
-{trajectory}
-
-{critique_section}
-Generate the next action step (JSON only):"""
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Critic Agent Prompt（参照 Voyager critic prompt）
-# ─────────────────────────────────────────────────────────────────────────────
-
-CRITIC_SYSTEM_PROMPT = """You are a Minecraft task success evaluator. Given the current game state and the task description, determine if the task was truly completed.
-
-Rules:
-- Be STRICT: only return success=true if the task goal is fully met.
-- Check inventory for required items.
-- Check position if the task involved moving somewhere.
-- Check nearby_entities if the task involved finding or interacting with mobs.
-- If the task partially succeeded, return success=false with a specific critique.
-- Keep critique concise and actionable (1-2 sentences max).
-
-Output ONLY valid JSON:
-{"success": true/false, "critique": "specific feedback on what failed or what's still needed"}"""
+Explain: （仅在有上一轮错误时）分析 Execution error 和 Chat log，说明为什么上次没成功。
+Plan:
+1. ...
+2. ...
+Code:
+```javascript
+async function taskName(bot) {
+    // 实现
+}
+```"""
 
 
-CRITIC_HUMAN_TEMPLATE = """Task: {task}
-
-Current Game State:
-- Position: {position}
-- Inventory: {inventory}
-- Nearby entities: {nearby_entities}
-- Health: {health}/20
-- XP Level: {xp_level}
-- Recent observation: {last_observation}
-
-Did the agent successfully complete the task? Output JSON only:"""
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Planner Prompt（任务分解，简洁版）
-# ─────────────────────────────────────────────────────────────────────────────
-
-PLANNER_SYSTEM_PROMPT = """You are a Minecraft task decomposer. Break complex tasks into ordered subtasks.
-
-Rules:
-1. Subtasks must be in dependency order: gather materials BEFORE crafting.
-2. Each subtask description will be used directly as an agent instruction — be specific.
-3. success_criteria must be checkable from inventory/position (e.g., "has 5 oak_log in inventory").
-4. can_skip_if: when current inventory already satisfies this subtask.
-5. 2-6 subtasks max. If simple enough for 1 step, return 1 subtask.
-6. required_items: what items must already exist BEFORE starting this subtask.
-
-Output valid JSON array only:
-[
-  {
-    "name": "short name",
-    "description": "exact instruction for the agent",
-    "success_criteria": "checkable condition",
-    "required_items": {"item_name": count},
-    "can_skip_if": "condition when this can be skipped"
-  }
-]"""
-
-
-PLANNER_HUMAN_TEMPLATE = """Task: {task}
-
-Current inventory: {inventory}
-Current position: {position}
+CODE_GENERATION_HUMAN_TEMPLATE = """Code from the last round: {last_code}
+Execution error: {execution_error}
+Chat log: {chat_log}
 Biome: {biome}
-
-Decompose this task into subtasks (JSON array only):"""
+Time: {time_of_day}
+Nearby blocks: {nearby_blocks}
+Nearby entities: {nearby_entities}
+Health: {health} / 20
+Hunger: {food} / 20
+Position: x={pos_x}, y={pos_y}, z={pos_z}
+Equipment: {equipment}
+Inventory ({inv_used}/36): {inventory}
+Task: {task}
+Context: {context}
+Critique: {critique}"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Skill Abstraction Prompt
+# ★ 技能代码抽象 Prompt（成功轨迹 → 可复用 JS 函数）
 # ─────────────────────────────────────────────────────────────────────────────
 
-SKILL_ABSTRACT_SYSTEM_PROMPT = """You are a Minecraft skill extractor. Given a successful task execution trajectory, extract a reusable skill.
+SKILL_CODE_SYSTEM_PROMPT = """You are a Minecraft skill extractor. Given a successfully executed JS function and its task, produce a cleaner, reusable version as a skill.
 
 Rules:
-1. The skill must be generalizable — replace specific coordinates with parameter names.
-2. steps[] must be in correct execution order.
-3. preconditions: what must be true BEFORE running this skill.
-4. parameters: variable inputs (block_type, count, target_position, etc.)
-5. Only extract if the trajectory shows clear success.
+1. Make it generic — remove hardcoded values, add parameters.
+2. Signature must be: async function skillName(bot, params = {})
+3. Keep using the control primitives (mineBlock, craftItem, etc.).
+4. Add bot.chat() at key progress points.
+5. Function name should clearly describe the capability.
 
 Output valid JSON only:
 {
-  "name": "skill_name",
-  "description": "what this skill does",
-  "parameters": {"param_name": "description"},
-  "preconditions": ["condition1", "condition2"],
-  "steps": [
-    {"action": "action_type", "params": {...}, "description": "why this step"}
-  ],
-  "postconditions": ["what should be true after success"]
+  "name": "function_name",
+  "description": "one sentence what this skill does",
+  "code": "async function function_name(bot, params = {}) { ... }",
+  "parameters": {"param_name": "description and default"},
+  "preconditions": ["what must be true before calling"]
 }"""
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Chat / Personality Prompt（保留人格，仅用于闲聊）
-# ─────────────────────────────────────────────────────────────────────────────
+SKILL_CODE_HUMAN_TEMPLATE = """Task: {task}
 
-CHAT_SYSTEM_PROMPT = """你是「晨曦」，一个生活在 Minecraft 世界中的 AI 助手。性格活泼可爱，对 Minecraft 非常熟悉。
+Successfully executed code:
+{code}
 
-当玩家问问题时，给出简洁友善的回答。如果是 Minecraft 游戏知识，尽量准确。
-回复用中文，控制在 100 字以内。不要假装你在游戏里执行任务，你现在是在聊天。"""
+Execution output:
+{output}
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Intent Classification Prompt
-# ─────────────────────────────────────────────────────────────────────────────
-
-INTENT_SYSTEM_PROMPT = """Classify the player's message into one category. Reply with ONLY the category name.
-
-Categories:
-- task_execution: player wants you to do something in the game world (mine, craft, build, collect, move, kill)
-- knowledge_qa: player asks about Minecraft mechanics, recipes, strategies
-- chat: casual conversation, greetings, emotions, thanks
-
-Reply with exactly one word: task_execution OR knowledge_qa OR chat"""
+Extract reusable skill (JSON only):"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Complexity Classification Prompt
+# Critic
 # ─────────────────────────────────────────────────────────────────────────────
 
-COMPLEXITY_SYSTEM_PROMPT = """Classify this Minecraft task. Reply with ONLY one word.
+CRITIC_SYSTEM_PROMPT = """You are a Minecraft task success evaluator.
+Be STRICT: success=true only if fully met.
+Check inventory, position, entities as needed.
+Critique must be specific and actionable (max 2 sentences).
+Output ONLY: {"success": true/false, "critique": "..."}"""
 
-complex: needs multiple steps with dependencies (craft chain, build structure, farm setup, multi-material gathering)
-simple: 1-3 steps with no dependencies (move somewhere, mine a few blocks, single gather, check inventory)
+CRITIC_HUMAN_TEMPLATE = """Task: {task}
+Position: {position}
+Inventory: {inventory}
+Nearby entities: {nearby_entities}
+Health: {health}/20
+Execution output: {last_output}
+JSON only:"""
 
-Reply with exactly: simple OR complex"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Planner
+# ─────────────────────────────────────────────────────────────────────────────
+
+PLANNER_SYSTEM_PROMPT = """You are a Minecraft task decomposer.
+Subtask descriptions must be clear imperative instructions that a code-generating agent can act on directly.
+Order by dependency: gather → smelt → craft → build.
+2-6 subtasks max.
+Output JSON array only:
+[{"name":"short","description":"Direct instruction","success_criteria":"has N item","required_items":{},"can_skip_if":"has:item:N"}]"""
+
+PLANNER_HUMAN_TEMPLATE = """Task: {task}
+Inventory: {inventory}
+Position: {position}
+Biome: {biome}
+{rag_context}
+Decompose (JSON array only):"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Intent / Complexity / Autonomous / Chat
+# ─────────────────────────────────────────────────────────────────────────────
+
+INTENT_SYSTEM_PROMPT = """Classify player message. One word only.
+task_execution | knowledge_qa | chat"""
+
+COMPLEXITY_SYSTEM_PROMPT = """Classify Minecraft task. One word only.
+complex: multiple dependent steps | simple: 1-3 direct steps"""
+
+AUTONOMOUS_SYSTEM_PROMPT = """Minecraft AI agent autonomous mode.
+Priority: 1)survival(health<10) 2)safety(night) 3)craft basic tools 4)explore
+Output JSON: {"reasoning":"why","urgency":"high|medium|low","task":"one sentence task"}"""
+
+AUTONOMOUS_HUMAN_TEMPLATE = """State: {game_state}
+Recent: {recent_memory}
+Next action? (JSON only):"""

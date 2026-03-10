@@ -10,7 +10,7 @@ agent 包 - Minecraft AI Agent 核心模块（v2 / Voyager）
 - SkillLibrary      : 技能自动抽象与检索（Critic 验证后存储）
 - PersonalitySystem : 情绪与关系系统
 - LLMRouter         : 分层 LLM 调用路由
-- MineflayerEnv     : 环境接口（HTTP → mineflayer）
+- MineflayerEnv     : 环境接口（HTTP → mineflayer，含 execute_code）
 """
 
 from .react_agent import VoyagerAgent

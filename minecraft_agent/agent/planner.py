@@ -1,11 +1,10 @@
 """
-层级任务规划器 v2（Refactored）
+层级任务规划器 v3（RAG 增强版）
 
-核心变更：
-1. Prompt 大幅简化 —— 去除冗余规则，专注于分解逻辑
-2. 加入快速背包预检（check_can_skip）—— 直接用 game_state 判断，不走 LLM
-3. SubTask 增加 required_items 字段，支持依赖检查
-4. decompose() 改为同步 + 异步两种调用方式
+核心升级：
+  1. decompose() 支持传入 retriever，注入 RAG 上下文
+  2. PLANNER_HUMAN_TEMPLATE 含 {rag_context} 占位符
+  3. 并发：RAG 检索与 LLM 调用可并发（调用方 react_agent 已处理）
 """
 
 import json
@@ -24,7 +23,7 @@ class SubTask:
     name: str
     description: str
     success_criteria: str = ""
-    required_items: dict = field(default_factory=dict)   # {"oak_log": 5}
+    required_items: dict = field(default_factory=dict)
     can_skip_if: str = ""
     status: str = "pending"   # pending | running | done | skipped | failed
 
@@ -33,68 +32,67 @@ class SubTask:
 
 
 def check_success_criteria_met(criteria: str, game_state: dict) -> bool:
-    """
-    用简单规则检查 success_criteria 是否满足（不走 LLM）。
-
-    支持格式：
-      "has N <item> in inventory"
-      "inventory contains <item>"
-      "背包中有至少 N 个 <item>"
-    """
     if not criteria:
         return False
 
     inventory = game_state.get("inventory", [])
     inv_map: dict[str, int] = {}
     for item in inventory:
-        name = item.get("item") or item.get("name") or ""
+        name  = item.get("item") or item.get("name") or ""
         count = item.get("count", 1)
-        # 规范化：去掉 minecraft: 前缀
-        name = name.replace("minecraft:", "").lower()
+        name  = name.replace("minecraft:", "").lower()
         inv_map[name] = inv_map.get(name, 0) + count
 
-    # 尝试解析 "has N item" 或 "至少 N 个 item"
     match = re.search(
         r'(?:has|至少|contains?)\s+(\d+)\s+(?:个\s*)?([a-z_\u4e00-\u9fff]+)',
         criteria.lower()
     )
     if match:
-        needed = int(match.group(1))
+        needed    = int(match.group(1))
         item_name = match.group(2).replace("minecraft:", "").lower()
-        have = inv_map.get(item_name, 0)
+        have      = inv_map.get(item_name, 0)
         return have >= needed
 
     return False
 
 
-def is_gather_subtask(subtask: SubTask) -> bool:
-    """启发式判断是否是采集类子任务（可通过背包跳过）"""
-    gather_keywords = ["采集", "收集", "获取", "找到", "挖", "砍", "gather", "collect", "mine", "chop"]
+def is_gather_subtask(subtask: "SubTask") -> bool:
+    gather_kw = ["采集", "收集", "获取", "找到", "挖", "砍",
+                 "gather", "collect", "mine", "chop", "find"]
     text = (subtask.name + subtask.description).lower()
-    return any(kw in text for kw in gather_keywords)
+    return any(kw in text for kw in gather_kw)
 
 
 class TaskPlanner:
-    """
-    层级任务分解器。
-
-    decompose(task, game_state) → list[SubTask]
-    """
-
     def __init__(self, llm: LLMRouter):
         self.llm = llm
 
-    async def decompose(self, task: str, game_state: dict) -> list[SubTask]:
-        """
-        将复杂任务分解为按依赖顺序的子任务列表。
+    async def decompose(
+        self,
+        task: str,
+        game_state: dict,
+        retriever=None,              # ★ 可选 RAGRetriever
+    ) -> list["SubTask"]:
+        """将复杂任务分解为有序子任务列表"""
 
-        Returns:
-            list[SubTask]，已按依赖顺序排列
-        """
-        human_msg = self._build_human_message(task, game_state)
+        # ★ 并发获取 RAG 上下文（如果有 retriever）
+        rag_context = ""
+        if retriever:
+            try:
+                docs = await retriever.search(task, top_k=3)
+                if docs:
+                    snippets = [
+                        f"  - {d.get('title','')}: {d.get('content','')[:200]}"
+                        for d in docs if d.get("score", 0) > 0.3
+                    ]
+                    if snippets:
+                        rag_context = "\nRelevant Minecraft knowledge:\n" + "\n".join(snippets)
+            except Exception as e:
+                logger.debug(f"[Planner] RAG 检索失败: {e}")
 
-        logger.info(f"[Planner] 开始分解任务: {task[:60]}")
+        human_msg = self._build_human_message(task, game_state, rag_context)
 
+        logger.info(f"[Planner] 分解任务: {task[:60]}")
         raw = await self.llm.think_fast(
             system_prompt=PLANNER_SYSTEM_PROMPT,
             user_prompt=human_msg,
@@ -110,22 +108,16 @@ class TaskPlanner:
             logger.warning("[Planner] 解析失败，返回单步兜底")
             return [SubTask(name=task, description=task)]
 
-        logger.info(f"[Planner] 分解成功: {[s.name for s in subtasks]}")
+        logger.info(f"[Planner] 分解为: {[s.name for s in subtasks]}")
         return subtasks
 
-    async def check_if_satisfied(
-        self, subtask: SubTask, game_state: dict
-    ) -> bool:
-        """
-        检查子任务是否已满足（可跳过）。
-        优先用规则判断，规则无法判断时才走 LLM。
-        """
+    async def check_if_satisfied(self, subtask: "SubTask", game_state: dict) -> bool:
         # 1. 规则快速判断
         if subtask.success_criteria:
             if check_success_criteria_met(subtask.success_criteria, game_state):
                 return True
 
-        # 2. 背包检查：如果 required_items 已全部存在，且是采集类任务 → 跳过
+        # 2. 背包检查（采集类）
         if subtask.required_items and is_gather_subtask(subtask):
             inventory = game_state.get("inventory", [])
             inv_map: dict[str, int] = {}
@@ -133,66 +125,69 @@ class TaskPlanner:
                 name = (item.get("item") or item.get("name") or "").replace("minecraft:", "").lower()
                 inv_map[name] = inv_map.get(name, 0) + item.get("count", 1)
 
-            all_satisfied = all(
+            all_ok = all(
                 inv_map.get(k.replace("minecraft:", "").lower(), 0) >= v
                 for k, v in subtask.required_items.items()
             )
-            if all_satisfied:
+            if all_ok:
                 return True
 
-        # 3. can_skip_if：LLM 判断（仅在规则无法确定时）
+        # 3. can_skip_if 快速解析（避免 LLM 调用）
         if subtask.can_skip_if:
-            result = await self._llm_check_skip(subtask.can_skip_if, game_state)
-            return result
+            cond = subtask.can_skip_if.strip()
+            # 格式：has:item:N
+            if cond.startswith("has:"):
+                parts = cond.split(":")
+                if len(parts) >= 3:
+                    item_name = parts[1]
+                    count     = int(parts[2]) if parts[2].isdigit() else 1
+                    return check_success_criteria_met(
+                        f"has {count} {item_name}", game_state
+                    )
+            # 回退到 LLM 判断
+            return await self._llm_check_skip(cond, game_state)
 
         return False
 
     # ── 内部工具 ─────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _build_human_message(task: str, game_state: dict) -> str:
+    def _build_human_message(
+        task: str, game_state: dict, rag_context: str = ""
+    ) -> str:
         inventory = game_state.get("inventory", [])
-        if isinstance(inventory, list):
-            inv_str = ", ".join(
-                f"{item.get('item', item.get('name', '?'))} x{item.get('count', 1)}"
-                for item in inventory[:15]
-            ) or "empty"
-        else:
-            inv_str = str(inventory) or "empty"
+        inv_str = ", ".join(
+            f"{item.get('item', item.get('name', '?'))} x{item.get('count', 1)}"
+            for item in inventory[:15]
+        ) or "empty"
 
         pos = game_state.get("position", {})
-        if isinstance(pos, dict):
-            pos_str = f"({pos.get('x', '?')}, {pos.get('y', '?')}, {pos.get('z', '?')})"
-        else:
-            pos_str = str(pos)
+        pos_str = (f"({pos.get('x','?')}, {pos.get('y','?')}, {pos.get('z','?')})"
+                   if isinstance(pos, dict) else str(pos))
 
-        # 兼容 mineflayer 返回的顶层 biome 或原 environment.biome
         env = game_state.get("environment", {})
-        biome_str = (env.get("biome") if isinstance(env, dict) else None) or game_state.get("biome") or "unknown"
+        biome = (env.get("biome") if isinstance(env, dict) else None) \
+                or game_state.get("biome", "unknown")
 
         return PLANNER_HUMAN_TEMPLATE.format(
             task=task,
             inventory=inv_str,
             position=pos_str,
-            biome=biome_str,
+            biome=biome,
+            rag_context=rag_context,
         )
 
     @staticmethod
-    def _parse_subtasks(raw: str) -> list[SubTask] | None:
-        """解析 LLM 返回的 JSON 数组为 SubTask 列表"""
+    def _parse_subtasks(raw: str) -> list["SubTask"] | None:
         text = raw.strip()
-
-        # 去掉 markdown
         if "```" in text:
             lines = text.split("\n")
-            text = "\n".join(l for l in lines if not l.strip().startswith("```"))
+            text  = "\n".join(l for l in lines if not l.strip().startswith("```"))
 
-        # 修复常见 JSON 错误
         text = re.sub(r"[\x00-\x1f\x7f]", " ", text)
         text = re.sub(r",\s*}", "}", text)
-        text = re.sub(r",\s*]", "]", text)
+        text = re.sub(r",\s*]",  "]", text)
 
-        # 找 JSON 数组
         match = re.search(r'\[.*\]', text, re.DOTALL)
         if match:
             text = match.group(0)
@@ -220,26 +215,16 @@ class TaskPlanner:
             logger.warning(f"[Planner] JSON 解析失败: {e}")
             return None
 
-    async def _llm_check_skip(self, can_skip_if: str, game_state: dict) -> bool:
-        """用 LLM 判断 can_skip_if 条件是否满足"""
+    async def _llm_check_skip(self, condition: str, game_state: dict) -> bool:
         inventory = game_state.get("inventory", [])
         inv_str = ", ".join(
-            f"{item.get('item', '?')} x{item.get('count', 1)}"
+            f"{item.get('item','?')} x{item.get('count',1)}"
             for item in inventory[:10]
         ) or "empty"
 
-        prompt = (
-            f"Current inventory: {inv_str}\n"
-            f"Condition: {can_skip_if}\n"
-            f"Is the condition satisfied? Reply with only 'yes' or 'no'."
-        )
-
         result = await self.llm.classify(
             system_prompt="You are a Minecraft inventory checker. Answer yes or no only.",
-            user_prompt=prompt,
+            user_prompt=f"Inventory: {inv_str}\nCondition: {condition}\nSatisfied? yes/no",
             temperature=0.0,
         )
-
-        if result:
-            return result.strip().lower().startswith("yes")
-        return False
+        return bool(result and result.strip().lower().startswith("yes"))

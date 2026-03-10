@@ -110,7 +110,6 @@ class CriticAgent:
             ent_str = str(entities) or "none"
 
         health = game_state.get("health", "?")
-        xp = game_state.get("xp_level", game_state.get("experience_level", "?"))
 
         return CRITIC_HUMAN_TEMPLATE.format(
             task=task,
@@ -118,8 +117,7 @@ class CriticAgent:
             inventory=inv_str,
             nearby_entities=ent_str,
             health=health,
-            xp_level=xp,
-            last_observation=last_observation[:200] if last_observation else "N/A",
+            last_output=last_observation[:500] if last_observation else "N/A",
         )
 
     @staticmethod

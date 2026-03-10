@@ -217,7 +217,7 @@ class AutonomousExplorer:
         """获取技能库中已有技能的名称列表（用于避免重复学习）"""
         try:
             # 用通用词搜索，获取代表性技能
-            results = await self.skill_lib.search_skill("采集 合成 挖掘 探索", top_k=10)
+            results = await self.skill_lib.search_skills("采集 合成 挖掘 探索", top_k=10)
             names = []
             for r in results:
                 skill = r.get("skill", {})

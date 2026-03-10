@@ -1,0 +1,12 @@
+{
+  "name": "moveToPlayer",
+  "description": "Moves the bot to a nearby player's position.",
+  "code": "async function moveToPlayer(bot, params = {}) {\n    // Get player entity position\n    const player = bot.nearestEntity(entity => entity.type === 'player');\n    if (!player) {\n        bot.chat(\"I don't see any players nearby\");\n        return;\n    }\n\n    const targetPos = player.position;\n    bot.chat(`Moving to player at ${targetPos.x}, ${targetPos.y}, ${targetPos.z}`);\n    \n    // Move to player with minimum distance of 1 block\n    await bot.pathfinder.goto(new GoalNear(targetPos.x, targetPos.y, targetPos.z, 1));\n    \n    bot.chat(\"Arrived at player's location\");\n}",
+  "parameters": {},
+  "preconditions": [
+    "A player must be nearby and visible to the bot"
+  ],
+  "reliability_score": 1.0,
+  "success_count": 1,
+  "fail_count": 0
+}
