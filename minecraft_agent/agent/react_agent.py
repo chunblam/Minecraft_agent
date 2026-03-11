@@ -29,7 +29,7 @@ from .planner import TaskPlanner
 from .env import get_env
 from .prompts import (
     CODE_GENERATION_SYSTEM_PROMPT, CODE_GENERATION_HUMAN_TEMPLATE,
-    INTENT_SYSTEM_PROMPT, COMPLEXITY_SYSTEM_PROMPT,
+    UNIFIED_CLASSIFY_PROMPT,
     AUTONOMOUS_SYSTEM_PROMPT, AUTONOMOUS_HUMAN_TEMPLATE,
 )
 
@@ -48,17 +48,25 @@ class VoyagerAgent:
         self.retriever   = retriever
         self.critic      = CriticAgent(llm)
         self.planner     = TaskPlanner(llm)
+        self.on_code_gen_progress = None  # 可选：流式代码生成时首 chunk 回调（如发 MC 聊天「正在生成代码…」）
 
     # ── 公共入口 ──────────────────────────────────────────────────────────────
 
     async def run(self, game_state: dict, player_message: str) -> dict:
         await self.memory.add_event("user", player_message,
                                     {"player": game_state.get("player_name", "Player")})
-        intent = await self._classify_intent(player_message)
+        cls = await self._classify(player_message, game_state)
+        intent = cls.get("intent", "task_execution")
         if intent != "task_execution":
             logger.log("FLOW", f"Agent.run → intent={intent!r} path=chat")
             return await self._chat_reply(game_state, player_message)
-        complexity = await self._classify_complexity(player_message, game_state)
+        if cls.get("feasible") is False:
+            reason = cls.get("reason", "该操作不可行")
+            msg = f"无法执行：{reason}"
+            logger.log("FLOW", f"Agent.run → feasible=False reason={reason!r}")
+            await self.memory.add_event("agent", msg, {})
+            return {"action_type": "chat", "display_message": msg, "extra_data": {}}
+        complexity = cls.get("complexity", "simple")
         path = "hierarchical" if complexity == "complex" else "task"
         logger.log("FLOW", f"Agent.run → intent=task_execution complexity={complexity!r} path={path!r}")
         result = (await self._run_hierarchical(game_state, player_message)
@@ -97,6 +105,11 @@ class VoyagerAgent:
 
     async def _run_task(self, task: str, game_state: dict,
                         critique: str = "", context: str = "") -> dict:
+        # 技能库快速匹配：同质不同参时优先用已有技能代码并尝试参数替换执行
+        fast_result = await self._try_skill_fast_path(task, game_state)
+        if fast_result is not None:
+            return fast_result
+
         logger.log("FLOW", f"_run_task → _build_context(task={task[:35]!r})")
         if not context:
             context = await self._build_context(task, game_state)
@@ -110,13 +123,26 @@ class VoyagerAgent:
         for attempt in range(1, MAX_RETRIES + 1):
             logger.info(f"[CodeLoop] '{task[:50]}' attempt {attempt}/{MAX_RETRIES}")
 
-            # 1. LLM 生成 async JS function
+            # 1. LLM 生成 async JS function（首次用流式以便 MC 聊天栏可提示「正在生成代码…」）
             prompt = self._build_code_prompt(
                 task, game_state, context,
-                last_code, last_error, last_output, critique)
-            raw = await self.llm.think(
-                system_prompt=CODE_GENERATION_SYSTEM_PROMPT,
-                user_prompt=prompt, temperature=0.3)
+                last_code, last_error, last_output, critique, attempt=attempt)
+            if attempt == 1 and getattr(self, "on_code_gen_progress", None):
+                first_chunk = [True]
+                async def _on_chunk(delta: str):
+                    if first_chunk[0] and delta and self.on_code_gen_progress:
+                        first_chunk[0] = False
+                        try:
+                            await self.on_code_gen_progress("正在生成代码…")
+                        except Exception as e:
+                            logger.debug(f"on_code_gen_progress: {e}")
+                raw = await self.llm.stream_think(
+                    system_prompt=CODE_GENERATION_SYSTEM_PROMPT,
+                    user_prompt=prompt, temperature=0.3, on_chunk=_on_chunk)
+            else:
+                raw = await self.llm.think(
+                    system_prompt=CODE_GENERATION_SYSTEM_PROMPT,
+                    user_prompt=prompt, temperature=0.3)
             if not raw:
                 logger.warning("[CodeLoop] LLM 无输出")
                 continue
@@ -251,9 +277,8 @@ class VoyagerAgent:
 
     # ── Prompt 构建 ───────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _build_code_prompt(task, game_state, context, last_code,
-                            execution_error, chat_log, critique) -> str:
+    def _build_code_prompt(self, task, game_state, context, last_code,
+                           execution_error, chat_log, critique, attempt: int = 1) -> str:
         pos = game_state.get("position", {})
         inv = game_state.get("inventory", [])
         eq  = game_state.get("equipment", {})
@@ -262,7 +287,12 @@ class VoyagerAgent:
         tod = game_state.get("time", 0)
         tod_str = ("midnight" if tod < 1000 else "day" if tod < 13000
                    else "sunset" if tod < 14000 else "night")
-        return CODE_GENERATION_HUMAN_TEMPLATE.format(
+        base_critique = critique or "N/A"
+        if attempt >= 3:
+            base_critique += "\n[重试要求] 请更保守：增加距离/背包检查、使用 exploreUntil 等容错手段，避免重复上次失败做法。"
+        elif attempt >= 2:
+            base_critique += "\n[重试要求] 请换一种思路，不要重复上次做法。"
+        body = CODE_GENERATION_HUMAN_TEMPLATE.format(
             last_code=last_code, execution_error=execution_error,
             chat_log=(chat_log or "N/A")[:300],
             biome=game_state.get("biome", "unknown"), time_of_day=tod_str,
@@ -277,7 +307,8 @@ class VoyagerAgent:
             inventory=", ".join(
                 f"{i.get('item','?')}x{i.get('count',1)}" for i in inv[:20]) or "empty",
             inv_used=sum(1 for i in inv if i),
-            task=task, context=context or "N/A", critique=critique or "N/A")
+            task=task, context=context or "N/A", critique=base_critique)
+        return body
 
     @staticmethod
     def _extract_code(raw: str) -> str | None:
@@ -291,6 +322,131 @@ class VoyagerAgent:
         return None
 
     # ── 闲聊 & 分类 ──────────────────────────────────────────────────────────
+
+    async def _classify(self, message: str, game_state: dict) -> dict:
+        """一次调用得到 intent、complexity、feasible、reason。"""
+        inv = game_state.get("inventory", [])
+        inv_summary = []
+        if isinstance(inv, list):
+            for i in inv[:24]:
+                name = (i.get("item") or i.get("name") or "?").strip()
+                cnt = i.get("count", 1)
+                if name and name != "?":
+                    inv_summary.append(f"{name}x{cnt}")
+        gs = {
+            "position": game_state.get("position"),
+            "health": game_state.get("health"),
+            "inventory_count": len(inv),
+            "inventory": inv_summary if inv_summary else "空或未提供",
+        }
+        user = f"玩家消息：{message}\n当前状态摘要：{json.dumps(gs, ensure_ascii=False)}"
+        raw = await self.llm.classify(
+            system_prompt=UNIFIED_CLASSIFY_PROMPT,
+            user_prompt=user,
+            temperature=0.2,
+        )
+        default = {"intent": "task_execution", "complexity": "simple", "feasible": True, "reason": ""}
+        if not raw or not raw.strip():
+            return default
+        try:
+            text = self._strip_json(raw)
+            data = json.loads(text)
+            intent = (data.get("intent") or "task_execution").strip().lower()
+            if "task" in intent: intent = "task_execution"
+            elif "knowledge" in intent or "qa" in intent: intent = "knowledge_qa"
+            else: intent = "chat"
+            complexity = (data.get("complexity") or "simple").strip().lower()
+            complexity = "complex" if "complex" in complexity else "simple"
+            feasible = data.get("feasible")
+            if not isinstance(feasible, bool):
+                feasible = str(feasible).strip().lower() not in ("false", "no", "0")
+            return {
+                "intent": intent,
+                "complexity": complexity,
+                "feasible": feasible,
+                "reason": (data.get("reason") or "").strip(),
+            }
+        except Exception as e:
+            logger.debug(f"_classify parse error: {e}, raw={raw[:150]}")
+            return default
+
+    async def _try_skill_fast_path(self, task: str, game_state: dict) -> dict | None:
+        """任务与技能库快速匹配：同质不同参时用技能代码+参数替换执行，成功则返回结果，否则返回 None 走 CodeLoop。"""
+        try:
+            results = await self.skill_lib.search_skills(task, top_k=1)
+            if not results:
+                return None
+            item = results[0]
+            score = item.get("score") if isinstance(item, dict) else getattr(item, "score", 0)
+            skill = item.get("skill", item) if isinstance(item, dict) else item
+            if isinstance(skill, dict):
+                code = skill.get("code", "")
+            else:
+                code = getattr(skill, "code", "") or ""
+            if not code or not code.strip():
+                return None
+            # 相似度阈值：高置信时才直接复用
+            if score < 0.88:
+                return None
+            adapted = self._adapt_skill_params(task, code)
+            if not adapted:
+                return None
+            env = get_env()
+            try:
+                exec_r = await env.execute_code(code=adapted, timeout_ms=CODE_TIMEOUT_MS)
+            except Exception as e:
+                logger.debug(f"[SkillFastPath] execute 异常: {e}，回退 CodeLoop")
+                return None
+            if not exec_r.get("success", False):
+                logger.debug(f"[SkillFastPath] 执行未成功，回退 CodeLoop")
+                return None
+            last_output = exec_r.get("output", "")
+            if exec_r.get("game_state"):
+                game_state.update(exec_r["game_state"])
+            ok, crit = await self._critic_check(task, game_state, last_output)
+            if not ok:
+                logger.debug(f"[SkillFastPath] Critic 未通过: {crit[:50]}，回退 CodeLoop")
+                return None
+            asyncio.create_task(self._store_skill(task, adapted, last_output))
+            return {
+                "action_type": "chat",
+                "display_message": f"✅ {task[:40]} 完成（技能库匹配）",
+                "extra_data": {"success": True, "skill_fast_path": True, "output": last_output},
+            }
+        except Exception as e:
+            logger.debug(f"[SkillFastPath] 异常: {e}")
+            return None
+
+    @staticmethod
+    def _adapt_skill_params(task: str, code: str) -> str | None:
+        """从任务描述提取数量等参数，替换到技能代码中（如 mineBlock 的 count）。无法安全替换时返回 None。"""
+        # 提取「N 个 / N个」中的数字
+        num_match = re.search(r"(\d+)\s*个", task)
+        if not num_match:
+            return code
+        want_count = int(num_match.group(1))
+        # 在常见原语中找第一个数字参数并替换（仅替换明显为数量的参数，避免改坐标）
+        # mineBlock(bot, "xxx", N) / craftItem(bot, "xxx", N)
+        def replace_count(m):
+            pre, num = m.group(1), m.group(2)
+            n = int(num)
+            if n <= 0 or n > 64:
+                return m.group(0)
+            return f"{pre}{want_count}"
+        code_new = re.sub(
+            r"(mineBlock\(bot,\s*[^,]+,\s*)(\d+)(\s*\))",
+            replace_count,
+            code,
+            count=1,
+        )
+        if code_new == code:
+            code_new = re.sub(
+                r"(craftItem\(bot,\s*[^,]+,\s*)(\d+)(\s*\))",
+                replace_count,
+                code,
+                count=1,
+            )
+        return code_new if code_new else code
 
     async def _chat_reply(self, game_state: dict, message: str) -> dict:
         player_name = game_state.get("player_name", "Player")
@@ -309,20 +465,6 @@ class VoyagerAgent:
         reply  = await self.llm.think_fast(
             system_prompt=system, user_prompt=message, temperature=0.8)
         return {"action_type": "chat", "display_message": reply or "嗯嗯！", "extra_data": {}}
-
-    async def _classify_intent(self, msg: str) -> str:
-        m = msg.lower()
-        if any(k in m for k in ["帮我","去","砍","挖","造","做","收集","找","建","采","炼","合成","探索","攻击","击杀","来","到","跟","身边","跟着","走"]): return "task_execution"
-        if any(k in m for k in ["你好","嗨","谢谢","晨曦","聊"]): return "chat"
-        r = await self.llm.classify(system_prompt=INTENT_SYSTEM_PROMPT, user_prompt=msg, temperature=0.0)
-        return "task_execution" if r and "task" in r.lower() else "chat"
-
-    async def _classify_complexity(self, msg: str, game_state: dict) -> str:
-        m = msg.lower()
-        if any(k in m for k in ["造","建","建造","合成","养","围栏","农场","基地","套装","铠甲","同时"]): return "complex"
-        if any(k in m for k in ["去","砍","挖","找","采集","移动","查看"]): return "simple"
-        r = await self.llm.classify(system_prompt=COMPLEXITY_SYSTEM_PROMPT, user_prompt=msg, temperature=0.0)
-        return "complex" if r and "complex" in r.lower() else "simple"
 
     @staticmethod
     def _strip_json(raw: str) -> str:

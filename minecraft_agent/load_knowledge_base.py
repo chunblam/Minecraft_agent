@@ -273,6 +273,3 @@ if __name__ == "__main__":
     # 验证
     retriever = RAGRetriever()
     verify_collections(retriever)
-
-    # 测试检索（可选，确认效果）
-    # test_retrieval(retriever)

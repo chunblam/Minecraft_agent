@@ -58,11 +58,15 @@ async def main():
     game_state=await env.start(reset="soft")
     logger.info(f"✅ Bot 已加入，位置: {game_state.get('position')}")
     agent=VoyagerAgent(llm=llm,memory=memory,skill_lib=skill_lib,personality=personality,retriever=retriever)
+    async def _on_code_gen_progress(msg: str):
+        try: await env.send_action("chat", {"message": msg})
+        except Exception: pass
+    agent.on_code_gen_progress = _on_code_gen_progress
     processed_msgs=set(); last_msg_time=time.time(); last_chat_count=0
     autonomous_enabled=False  # 默认关闭；聊天输入「autonomous explore」后启用
     # 用户执行 / 命令后，服务器返回的反馈会进聊天框且内容千变万化；用「同一用户、短时间内的下一条」视为反馈并跳过
-    pending_feedback_skip=None  # (username, timestamp) 或 None
-    FEEDBACK_SKIP_SEC=5
+    pending_feedback_skip=None  # (username, timestamp) 或 None；/ 命令后 2s 内同用户消息视为反馈忽略
+    FEEDBACK_SKIP_SEC=int(os.getenv("FEEDBACK_SKIP_SEC", "2"))
     logger.info(f"运行日志已写入: {_run_log}")
     try:
         while True:

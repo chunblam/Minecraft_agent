@@ -83,7 +83,7 @@ class SkillLibrary:
             output=output[:500],
         )
 
-        raw = await self.llm.think_fast(
+        raw = await self.llm.classify(
             system_prompt=SKILL_CODE_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             temperature=0.3,
@@ -134,25 +134,6 @@ class SkillLibrary:
             lines.append(sk.get("code", ""))
             lines.append("")
         return "\n".join(lines)
-
-    # ── 可靠性更新 ────────────────────────────────────────────────────────────
-
-    async def update_reliability(self, skill_name: str, success: bool) -> None:
-        skill = await self._get_skill(skill_name)
-        if not skill:
-            return
-
-        if success:
-            skill["success_count"] = skill.get("success_count", 0) + 1
-        else:
-            skill["fail_count"] = skill.get("fail_count", 0) + 1
-
-        total    = skill["success_count"] + skill["fail_count"]
-        raw_rate = skill["success_count"] / total if total > 0 else 0.5
-        old      = skill.get("reliability_score", 0.5)
-        skill["reliability_score"] = 0.7 * old + 0.3 * raw_rate
-
-        await self._store_skill(skill)
 
     # ── ChromaDB ─────────────────────────────────────────────────────────────
 

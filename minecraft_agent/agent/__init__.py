@@ -20,7 +20,7 @@ from .memory import ShortTermMemory, LongTermMemory, MemoryManager
 from .skill_library import SkillLibrary
 from .personality import PersonalitySystem
 from .llm_router import LLMRouter
-from .env import MineflayerEnv, get_env, connection_manager
+from .env import MineflayerEnv, get_env
 
 __all__ = [
     "VoyagerAgent",
@@ -37,5 +37,4 @@ __all__ = [
     "LLMRouter",
     "MineflayerEnv",
     "get_env",
-    "connection_manager",
 ]

@@ -307,14 +307,3 @@ def get_env() -> MineflayerEnv:
     if _env_instance is None:
         _env_instance = MineflayerEnv()
     return _env_instance
-
-
-class _ConnectionManagerCompat:
-    async def send_action(self, at, ap, dm="", timeout=60.0):
-        return await get_env().send_action(at, ap, dm, timeout)
-    def is_connected(self): return get_env()._started
-    def resolve_observation(self, *a, **k): pass
-    def set_connection(self, *a, **k): pass
-    def clear_connection(self): pass
-
-connection_manager = _ConnectionManagerCompat()

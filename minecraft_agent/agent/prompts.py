@@ -171,11 +171,23 @@ Decompose (JSON array only):"""
 # Intent / Complexity / Autonomous / Chat
 # ─────────────────────────────────────────────────────────────────────────────
 
-INTENT_SYSTEM_PROMPT = """Classify player message. One word only.
-task_execution | knowledge_qa | chat"""
+# 统一分类：一次调用输出 intent + complexity + feasible + reason
+UNIFIED_CLASSIFY_PROMPT = """你是一个 Minecraft 游戏助手。根据玩家消息和当前游戏状态，输出一条 JSON（仅此 JSON，无其他文字）：
+{
+  "intent": "task_execution" | "knowledge_qa" | "chat",
+  "complexity": "simple" | "complex",
+  "feasible": true | false,
+  "reason": "当 feasible 为 false 时简短说明原因（如缺少 OP、不可行指令），否则空字符串"
+}
 
-COMPLEXITY_SYSTEM_PROMPT = """Classify Minecraft task. One word only.
-complex: multiple dependent steps | simple: 1-3 direct steps"""
+规则：
+- intent: 要执行游戏内操作（挖矿、合成、移动等）为 task_execution；问知识/配方为 knowledge_qa；闲聊为 chat。
+- feasible: 若消息明显不可行（如要求切换创造模式但无 OP、或无法在游戏内完成）则为 false，否则 true。仅当明显不可行时才设 false；不确定时设为 true。
+
+- complexity（重要，决定是否做任务分解）：
+  · simple：仅限「单一动作或明确 1～3 步、且不依赖先获取/合成其他物品」的任务。例如：挖 N 个某方块、去某处、吃食物、捡起附近掉落物、合成工作台（且状态里已有足够木头）。
+  · complex：凡涉及「合成/制作/建造」某件物品（如木斧、镐、工作台、熔炉、建筑），且从当前状态无法确信「原材料与工作台等已齐备」的，一律判为 complex，以便先拆解为「采集→合成→…」子任务。例如：造一把木斧、做石镐、造房子、做一套装备——即使玩家只说「造木斧」，若背包未见齐备材料（木头/木板/木棍等），也应判 complex；只有当你明确看到状态里已有该合成所需全部材料且可有工作台时，才可考虑 simple。
+  · 判断时结合状态中的 inventory：若状态中有背包物品列表，用其判断是否已具备合成所需材料；若状态中无详细背包或背包为空/很少，涉及合成的任务默认判 complex。"""
 
 AUTONOMOUS_SYSTEM_PROMPT = """Minecraft AI agent autonomous mode.
 Priority: 1)survival(health<10) 2)safety(night) 3)craft basic tools 4)explore

@@ -1,13 +1,8 @@
 """
-LLM 分层调用路由模块（v3 —— 全 V3 快速推理）
+LLM 分层模型路由（优化版：小模型 + 大模型分离）
 
-模型分配策略（与 Voyager 论文一致，GPT-4 非推理模型即可完成任务）：
-  - 全部使用 DeepSeek-V3（deepseek-chat）：
-    · think() / think_fast() : 任务分解、ReAct 推理、行动计划生成（temperature=0.7）
-    · classify()             : 意图识别、条件检查（temperature=0.3）
-    · 技能抽象、闲聊回复等
-
-性能：V3 每次调用约 2-10 秒，无 R1 长推理等待。
+- classify()     → 小模型（硅基流动 Qwen2.5-7B）：意图/复杂度/可行性、RAG 分类、Critic、技能抽象
+- think/think_fast() → 大模型（DeepSeek 官方 deepseek-chat）：代码生成、任务分解、闲聊
 """
 
 import asyncio
@@ -16,63 +11,70 @@ import time
 from openai import AsyncOpenAI
 from loguru import logger
 
-# LLM 单次调用超时（秒），避免 API 无响应时长时间“卡住”
 LLM_CALL_TIMEOUT = float(os.getenv("DEEPSEEK_LLM_TIMEOUT", "90"))
 
 
 class LLMRouter:
     """
-    LLM 调用路由器（v3 —— 全 V3）。
-
-    三个入口均使用 V3：
-      think()      → 与 think_fast 相同（兼容旧调用）
-      think_fast() → 任务分解、ReAct 推理、行动规划
-      classify()   → 意图识别、技能抽象、闲聊回复
+    双模型路由：小模型做分类与轻量判断，大模型做代码生成与推理。
+    若未配置小模型 KEY，classify 回退到大模型。
     """
 
     def __init__(self) -> None:
-        api_key = os.getenv("DEEPSEEK_API_KEY", "")
-        base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+        # 小模型（硅基流动）：分类、Critic、RAG 分类、技能抽象
+        fast_key = os.getenv("SILICONFLOW_API_KEY", "") or os.getenv("DEEPSEEK_API_KEY", "")
+        fast_base = os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
+        self.fast_model = os.getenv("FAST_MODEL", "Qwen/Qwen2.5-7B-Instruct")
+        if fast_key:
+            self.fast_client = AsyncOpenAI(api_key=fast_key, base_url=fast_base)
+        else:
+            self.fast_client = None
+            logger.warning("SILICONFLOW_API_KEY 未设置，classify 将回退到大模型")
 
-        if not api_key:
-            logger.warning("DEEPSEEK_API_KEY 未设置，LLM 调用将失败")
+        # 大模型（DeepSeek 官方）：代码生成、任务分解、闲聊
+        code_key = os.getenv("DEEPSEEK_API_KEY", "")
+        code_base = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+        if not code_key:
+            logger.warning("DEEPSEEK_API_KEY 未设置，大模型调用将失败")
+        self.code_client = AsyncOpenAI(api_key=code_key or "dummy", base_url=code_base)
+        self.code_model = os.getenv("DEEPSEEK_V3_MODEL", "deepseek-chat")
 
-        self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        self.v3_model = os.getenv("DEEPSEEK_V3_MODEL", "deepseek-chat")
+    def _client_for_classify(self):
+        """分类用：有小模型则用小模型，否则用大模型."""
+        if self.fast_client is not None:
+            return self.fast_client, self.fast_model
+        return self.code_client, self.code_model
 
     async def think(self, system_prompt: str, user_prompt: str, temperature: float = 0.7) -> str:
-        """
-        与 think_fast 相同，统一使用 V3 快速推理（原 R1 已弃用）。
-        """
+        """代码生成 / 推理 → 大模型"""
         return await self.think_fast(system_prompt, user_prompt, temperature)
 
     async def think_fast(self, system_prompt: str, user_prompt: str, temperature: float = 0.7) -> str:
-        """
-        调用 DeepSeek-V3 进行快速推理（ReAct 步骤、技能抽象、行动规划等）。
-        响应速度 2-5 秒，适合需要反复调用的场景。
-        """
-        return await self._call(self.v3_model, system_prompt, user_prompt, temperature)
+        """任务分解、ReAct、闲聊、自主决策 → 大模型"""
+        return await self._call(
+            self.code_client, self.code_model,
+            system_prompt, user_prompt, temperature,
+        )
 
     async def classify(self, system_prompt: str, user_prompt: str, temperature: float = 0.3) -> str:
-        """
-        调用 DeepSeek-V3 进行快速分类或简单判断。
-        低温输出更确定，用于意图识别、条件检查等。
-        """
-        return await self._call(self.v3_model, system_prompt, user_prompt, temperature)
+        """意图、复杂度、可行性、Critic、RAG 分类、技能抽象 → 小模型（或回退大模型）"""
+        client, model = self._client_for_classify()
+        return await self._call(client, model, system_prompt, user_prompt, temperature)
 
     async def _call(
         self,
+        client: AsyncOpenAI,
         model: str,
         system_prompt: str,
         user_prompt: str,
         temperature: float,
     ) -> str:
-        """底层 API 调用，带超时、耗时统计和错误处理。超时或异常时返回空字符串，避免长时间卡住。"""
+        """底层 API 调用，带超时与错误处理。消息顺序固定为 [system, user]，便于 DeepSeek 上下文硬盘缓存对 system 前缀命中。"""
         t0 = time.monotonic()
-        logger.info(f"[LLM] 请求中: {model}")
+        logger.info(f"[LLM] 请求中（超时 {int(LLM_CALL_TIMEOUT)}s）: {model}")
         try:
             response = await asyncio.wait_for(
-                self.client.chat.completions.create(
+                client.chat.completions.create(
                     model=model,
                     messages=[
                         {"role": "system", "content": system_prompt},
@@ -86,6 +88,13 @@ class LLMRouter:
             content = response.choices[0].message.content or ""
             elapsed = time.monotonic() - t0
             logger.debug(f"模型响应 [{elapsed:.1f}s]（前200字）: {content[:200]}")
+            # DeepSeek 上下文硬盘缓存：命中部分成本更低，可选打日志
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                hit = getattr(usage, "prompt_cache_hit_tokens", None)
+                miss = getattr(usage, "prompt_cache_miss_tokens", None)
+                if hit is not None or miss is not None:
+                    logger.debug(f"[LLM] 缓存命中 tokens={hit or 0}, 未命中={miss or 0}")
             return content
         except asyncio.TimeoutError:
             elapsed = time.monotonic() - t0
@@ -94,3 +103,42 @@ class LLMRouter:
         except Exception as e:
             logger.error(f"LLM 调用失败 (model={model}): {e}", exc_info=True)
             return ""
+
+    async def stream_think(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.3,
+        on_chunk=None,
+    ) -> str:
+        """流式代码生成，on_chunk(delta) 可实时反馈（如发 MC 聊天）。"""
+        full_text = ""
+        t0 = time.monotonic()
+        logger.info(f"[LLM] stream 请求中: {self.code_model}")
+        try:
+            stream = await asyncio.wait_for(
+                self.code_client.chat.completions.create(
+                    model=self.code_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=temperature,
+                    stream=True,
+                ),
+                timeout=LLM_CALL_TIMEOUT,
+            )
+            async for chunk in stream:
+                delta = (chunk.choices[0].delta.content or "") if chunk.choices else ""
+                full_text += delta
+                if on_chunk and delta:
+                    await on_chunk(delta)
+            elapsed = time.monotonic() - t0
+            logger.debug(f"[LLM] stream 完成 [{elapsed:.1f}s]")
+            return full_text
+        except asyncio.TimeoutError:
+            logger.warning("[LLM] stream 超时，返回已接收内容")
+            return full_text
+        except Exception as e:
+            logger.error(f"LLM stream 失败: {e}", exc_info=True)
+            return full_text

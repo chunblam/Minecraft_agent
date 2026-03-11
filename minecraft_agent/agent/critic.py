@@ -41,16 +41,12 @@ class CriticAgent:
         max_retries: int = 3,
     ) -> tuple[bool, str]:
         """
-        判断 task 是否真正完成。
-
-        Args:
-            task:             任务描述
-            game_state:       当前完整游戏状态
-            last_observation: 最后一步行动的 observation 字符串
-
-        Returns:
-            (success, critique)
+        判断 task 是否真正完成。先走规则快速判断，再走 LLM。
         """
+        rule_result = self._rule_check(task, game_state, last_observation)
+        if rule_result is not None:
+            return rule_result
+
         human_message = self._build_human_message(task, game_state, last_observation)
 
         for attempt in range(max_retries):
@@ -74,6 +70,39 @@ class CriticAgent:
         # 解析全部失败 → 保守返回失败，附带默认 critique
         logger.error("[Critic] 多次解析失败，默认返回失败")
         return False, "无法验证任务状态，请重试"
+
+    def _rule_check(
+        self, task: str, game_state: dict, last_observation: str
+    ) -> tuple[bool, str] | None:
+        """规则层快速判断：能判定则返回 (success, critique)，否则返回 None 走 LLM。"""
+        out_lower = (last_observation or "").lower()
+        # 输出中明显失败：需要 OP、权限不足等
+        if "requires operator" in out_lower or "权限" in out_lower or "op" in out_lower and "need" in out_lower:
+            return False, "需要 OP 或权限不足"
+        if "success" in out_lower and "failed" not in out_lower and "error" not in out_lower:
+            # 简单成功关键词（可再细化）
+            pass
+
+        # 「获取 N 个 X」类任务：对照背包数量
+        m = re.search(r"(\d+)\s*个\s*(.+?)(?:\.|$|，|。)", task)
+        if not m:
+            m = re.search(r"采集\s*(\d+)\s*(.+?)(?:\.|$|，|。)", task)
+        if m:
+            want_count = int(m.group(1))
+            name_hint = m.group(2).strip()
+            inv = game_state.get("inventory", [])
+            if isinstance(inv, list):
+                total = 0
+                for item in inv:
+                    iname = (item.get("item") or item.get("name") or "").lower()
+                    if name_hint.lower() in iname or iname in name_hint.lower():
+                        total += int(item.get("count", 1))
+                if total >= want_count:
+                    return True, "背包数量已满足"
+                if total > 0:
+                    return False, f"需要 {want_count} 个，当前只有 {total} 个"
+
+        return None
 
     # ── 内部工具 ─────────────────────────────────────────────────────────────
 
