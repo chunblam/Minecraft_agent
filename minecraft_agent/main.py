@@ -26,7 +26,8 @@ from agent.personality import PersonalitySystem
 
 MC_HOST=os.getenv("MC_HOST","localhost"); MC_PORT=int(os.getenv("MC_PORT","25565"))
 MC_USERNAME=os.getenv("MC_USERNAME","Agent"); MINEFLAYER_PORT=int(os.getenv("MINEFLAYER_PORT","3000"))
-AUTONOMOUS_IDLE_S=int(os.getenv("AUTONOMOUS_IDLE_SECONDS","60"))
+AUTONOMOUS_FIRST_DELAY_S=int(os.getenv("AUTONOMOUS_FIRST_DELAY_SECONDS","15"))
+AUTONOMOUS_IDLE_S=int(os.getenv("AUTONOMOUS_IDLE_SECONDS","15"))
 
 def _is_system_chat_message(msg: str) -> bool:
     """过滤掉系统/控制台类消息：/ 开头为执行命令，不进入后续流程；传送等系统提示也过滤。"""
@@ -58,15 +59,27 @@ async def main():
     game_state=await env.start(reset="soft")
     logger.info(f"✅ Bot 已加入，位置: {game_state.get('position')}")
     agent=VoyagerAgent(llm=llm,memory=memory,skill_lib=skill_lib,personality=personality,retriever=retriever)
+    # 启动时自动将当前技能库导出到 data/skill_db_export，便于快速查验（可通过 EXPORT_SKILLS_ON_START=0 关闭）
+    if os.getenv("EXPORT_SKILLS_ON_START", "1").lower() in ("1", "true", "yes"):
+        try:
+            from scripts.export_skills import export_skills_to_path
+            _export_dir = os.path.join(_BASE_DIR, "data", "skill_db_export")
+            _n = export_skills_to_path(skill_lib, _export_dir, quiet=True)
+            logger.info(f"已导出 {_n} 条技能到 {_export_dir}")
+        except Exception as _e:
+            logger.debug(f"启动时导出技能跳过: {_e}")
     async def _on_code_gen_progress(msg: str):
         try: await env.send_action("chat", {"message": msg})
         except Exception: pass
     agent.on_code_gen_progress = _on_code_gen_progress
     processed_msgs=set(); last_msg_time=time.time(); last_chat_count=0
-    autonomous_enabled=False  # 默认关闭；聊天输入「autonomous explore」后启用
-    # 用户执行 / 命令后，服务器返回的反馈会进聊天框且内容千变万化；用「同一用户、短时间内的下一条」视为反馈并跳过
-    pending_feedback_skip=None  # (username, timestamp) 或 None；/ 命令后 2s 内同用户消息视为反馈忽略
-    FEEDBACK_SKIP_SEC=int(os.getenv("FEEDBACK_SKIP_SEC", "2"))
+    autonomous_enabled=False  # 默认关闭；聊天输入「autonomous」启用，「autonomous stop」关闭
+    autonomous_enabled_at=None  # 用户输入 autonomous 时设为 time.time()，用于首次 15s 延迟
+    last_autonomous_finish_ref={"t": None}  # 上次自主任务完成时间，用于任务间隔 15s
+    current_task_ref={"task": None}  # 当前运行的 agent 任务，用于 stop 中断
+    # 用户执行 / 命令后，服务器返回的反馈会进聊天框；5s 内所有聊天内容均不当作任务描述
+    last_slash_time=None  # 最近一次 / 命令时间；5s 内任意聊天都忽略
+    FEEDBACK_SKIP_SEC=int(os.getenv("FEEDBACK_SKIP_SEC", "5"))
     logger.info(f"运行日志已写入: {_run_log}")
     try:
         while True:
@@ -95,55 +108,111 @@ async def main():
                     key = f"{u}:{m}:{int(entry.get('time',0)/5000)}"
                     processed_msgs.add(key)
                     if m.startswith("/"):
-                        pending_feedback_skip = (u, time.time())
+                        last_slash_time = time.time()
                     continue
                 key=f"{u}:{m}:{int(entry.get('time',0)/5000)}"
                 if key in processed_msgs: continue
-                # 同一用户刚执行过 / 命令时，其下一条消息视为命令反馈，不交给 agent（反馈内容千变万化无法穷举）
-                if pending_feedback_skip is not None:
-                    u_prev, t_prev = pending_feedback_skip
-                    if u == u_prev and (time.time() - t_prev) <= FEEDBACK_SKIP_SEC:
-                        logger.log("MC_PLAYER", f"【MC】<{u}> {m[:80]}{'...' if len(m)>80 else ''} (已忽略-命令反馈)")
-                        processed_msgs.add(key)
-                        pending_feedback_skip = None
-                        continue
-                pending_feedback_skip = None
+                # / 命令后 5s 内所有聊天都不当作任务描述
+                if last_slash_time is not None and (time.time() - last_slash_time) <= FEEDBACK_SKIP_SEC:
+                    logger.log("MC_PLAYER", f"【MC】<{u}> {m[:80]}{'...' if len(m)>80 else ''} (已忽略-命令反馈)")
+                    processed_msgs.add(key)
+                    continue
+                if last_slash_time is not None:
+                    last_slash_time = None
                 processed_msgs.add(key)
                 if len(processed_msgs)>500: processed_msgs.clear()
                 logger.log("MC_PLAYER", f"【MC】<{u}> {m}")
                 last_msg_time=time.time(); game_state["player_name"]=u
-                if m.strip().lower()=="autonomous explore":
+                ml=m.strip().lower()
+                if ml=="autonomous stop":
+                    autonomous_enabled=False
+                    autonomous_enabled_at=None
+                    last_autonomous_finish_ref["t"]=None
+                    logger.info("[Main] 已通过聊天关闭自主探索")
+                    t=current_task_ref["task"]
+                    if t and not t.done():
+                        t.cancel()
+                        logger.info("[Main] 已中断当前任务")
+                    try: await env.send_action("chat",{"message":"已关闭自主探索，等待你的指令。"})
+                    except Exception: pass
+                    continue
+                if ml=="autonomous":
                     autonomous_enabled=True
+                    autonomous_enabled_at=time.time()
+                    last_autonomous_finish_ref["t"]=None
                     logger.info("[Main] 已通过聊天开启自主探索")
                     try: await env.send_action("chat",{"message":"已开启自主探索，空闲一段时间后我会自己行动。"})
                     except Exception: pass
                     continue
-                logger.log("FLOW", f"Main → agent.run(message={m[:40]!r})")
-                try:
-                    result=await agent.run(game_state,m)
-                    reply=result.get("display_message","")
-                    logger.log("FLOW", f"Main ← agent.run → display_message={str(reply)[:50]!r}")
-                    if reply:
-                        logger.log("MC_AGENT", f"【MC】<{MC_USERNAME}> {reply}")
-                        await env.send_action("chat",{"message":reply})
-                except Exception as e:
-                    logger.error(f"Agent异常: {e}",exc_info=True)
-                    err_lower = str(e).lower()
-                    if "connect" in err_lower or "refused" in err_lower or "timeout" in err_lower:
-                        try:
-                            if await env.ensure_bot_connected():
-                                logger.info("[Main] 连接已恢复（Agent 请求失败后重连）")
-                        except Exception as re:
-                            logger.debug(f"ensure_bot_connected: {re}")
+                if ml=="stop":
+                    t=current_task_ref["task"]
+                    if t and not t.done():
+                        t.cancel()
+                        logger.info("[Main] 已按 stop 中断当前任务")
+                        try: await env.send_action("chat",{"message":"已停止。"})
+                        except Exception: pass
+                    else:
+                        logger.log("FLOW", "[Main] 当前无运行中任务")
+                    continue
+                # 普通任务消息：若无运行中任务则启动，否则拒绝
+                t=current_task_ref["task"]
+                if t and not t.done():
+                    try: await env.send_action("chat",{"message":"当前有任务执行中，请稍候或输入 stop 中断。"})
+                    except Exception: pass
+                    continue
+                def _done_cb(t):
+                    current_task_ref["task"]=None
+                    if t.cancelled():
+                        return
                     try:
-                        await env.send_action("chat",{"message":"出了点问题，稍等..."})
-                    except Exception:
+                        r=t.result()
+                        reply=(r or {}).get("display_message","")
+                        if reply:
+                            logger.log("FLOW", f"Main ← agent.run → display_message={str(reply)[:50]!r}")
+                            logger.log("MC_AGENT", f"【MC】<{MC_USERNAME}> {reply}")
+                            asyncio.create_task(_send_chat(reply))
+                    except asyncio.CancelledError:
                         pass
-            if autonomous_enabled and AUTONOMOUS_IDLE_S>0 and time.time()-last_msg_time>AUTONOMOUS_IDLE_S:
-                last_msg_time=time.time()
-                logger.log("FLOW", "Main → run_autonomous (idle timeout)")
-                try: await agent.run_autonomous(game_state)
-                except Exception as e: logger.debug(f"自主模式异常: {e}")
+                    except Exception as e:
+                        logger.error(f"Agent 任务异常: {e}", exc_info=True)
+                        asyncio.create_task(_send_chat("出了点问题，稍等..."))
+                async def _send_chat(msg):
+                    try: await env.send_action("chat",{"message":msg})
+                    except Exception: pass
+                logger.log("FLOW", f"Main → agent.run(message={m[:40]!r})")
+                current_task_ref["task"]=asyncio.create_task(agent.run(game_state,m))
+                current_task_ref["task"].add_done_callback(_done_cb)
+            # 自主探索：首次 15s 后或上次任务完成后 15s 且无运行中任务时触发
+            t=current_task_ref["task"]
+            if autonomous_enabled and (not t or t.done()):
+                now=time.time()
+                if last_autonomous_finish_ref["t"] is None:
+                    # 尚未完成过任何自主任务：用开启时间判断
+                    start=autonomous_enabled_at
+                    wait_sec=AUTONOMOUS_FIRST_DELAY_S
+                else:
+                    start=last_autonomous_finish_ref["t"]
+                    wait_sec=AUTONOMOUS_IDLE_S
+                if start is not None and wait_sec>0 and (now-start)>=wait_sec:
+                    logger.log("FLOW", "Main → run_autonomous")
+                    def _done_auto(t):
+                        current_task_ref["task"]=None
+                        if t.cancelled():
+                            return
+                        last_autonomous_finish_ref["t"]=time.time()
+                        try:
+                            r=t.result()
+                            reply=(r or {}).get("display_message","")
+                            if reply:
+                                logger.log("MC_AGENT", f"【MC】<{MC_USERNAME}> {reply}")
+                                asyncio.create_task(_send_chat_auto(reply))
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                    async def _send_chat_auto(msg):
+                        try: await env.send_action("chat",{"message":msg})
+                        except Exception: pass
+                    current_task_ref["task"]=asyncio.create_task(agent.run_autonomous(game_state))
+                    current_task_ref["task"].add_done_callback(_done_auto)
     except KeyboardInterrupt:
         logger.info("退出...")
     finally:

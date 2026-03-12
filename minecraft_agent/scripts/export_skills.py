@@ -3,9 +3,14 @@
 将 ChromaDB / 内存技能库导出为可读的文件夹：每个技能一个 .js（代码）和一个 .json（元信息）。
 便于人工查看、备份和复用。
 
+- 运行 Agent（main.py）时，默认会在启动时自动导出当前技能到 data/skill_db_export，便于快速查验；
+  可通过环境变量 EXPORT_SKILLS_ON_START=0 关闭自动导出。
+- 也可手动执行本脚本导出或指定目录。
+
 用法（在 minecraft_agent 目录下）：
   python scripts/export_skills.py
-  python scripts/export_skills.py --out ./my_skills
+  python scripts/export_skills.py --out ./data/skill_db_export
+  python scripts/export_skills.py --db ./data/skill_db
 """
 
 import argparse
@@ -70,16 +75,16 @@ def export_from_chroma(skill_db_path: str, export_dir: str) -> int:
     return count
 
 
-def export_from_agent_lib(export_dir: str) -> int:
-    """通过 SkillLibrary 列出并导出（兼容内存库）。"""
-    from agent.skill_library import SkillLibrary
-    from agent.llm_router import LLMRouter
-
-    llm = LLMRouter()
-    skill_lib = SkillLibrary(llm=llm, persist_dir="./data/skill_db")
+def export_skills_to_path(skill_lib, export_dir: str, quiet: bool = False) -> int:
+    """
+    将技能库（SkillLibrary 实例）导出到指定目录：每个技能一个 .js + 一个 .json。
+    供 main 启动时自动导出或脚本直接传入 skill_lib 时使用。
+    quiet=True 时不 print 每条，只写文件。
+    """
     skills = skill_lib.list_all_skills()
     if not skills:
-        print("技能库为空")
+        if not quiet:
+            print("技能库为空")
         return 0
 
     os.makedirs(export_dir, exist_ok=True)
@@ -96,10 +101,22 @@ def export_from_agent_lib(export_dir: str) -> int:
             with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(sk, f, ensure_ascii=False, indent=2)
             count += 1
-            print(f"  {name} -> {safe}.js / {safe}.json")
+            if not quiet:
+                print(f"  {name} -> {safe}.js / {safe}.json")
         except Exception as e:
-            print(f"  跳过 {sk.get('name')}: {e}")
+            if not quiet:
+                print(f"  跳过 {sk.get('name')}: {e}")
     return count
+
+
+def export_from_agent_lib(export_dir: str) -> int:
+    """通过 SkillLibrary 列出并导出（兼容内存库）。"""
+    from agent.skill_library import SkillLibrary
+    from agent.llm_router import LLMRouter
+
+    llm = LLMRouter()
+    skill_lib = SkillLibrary(llm=llm, persist_dir="./data/skill_db")
+    return export_skills_to_path(skill_lib, export_dir, quiet=False)
 
 
 def main():

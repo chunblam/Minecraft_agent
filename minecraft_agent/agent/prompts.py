@@ -52,6 +52,11 @@ bot.scanNearby(24)                               // 返回 {blockName: count}
 bot.inventory.items()                            // 返回背包物品 [{name, count}]
 ```
 
+## 特殊获取与放置（必须遵守）
+- **小麦种子 wheat_seeds**：游戏中无「wheat_seeds」方块。正确做法：击打 **grass_block** 或 **short_grass** / **tall_grass** 有概率掉落种子。用 `await mineBlock(bot, "grass_block", N)`（或 short_grass）后 `await pickupNearbyItems(bot)`，循环直到 `bot.inventory.items()` 中 wheat_seeds 数量达标。
+- **placeItem 坐标**：position 只能是**普通对象 `{x, y, z}`**（整数）。**禁止**使用 `pos.floored()`、`bot.vec3()` 等未列出的 API。放置位置必须是「固体方块上方的空气格」，避免 bot 脚下或与实体重叠；可用 bot.entity.position 偏移 2 格以上，或 bot.findNearbyBlocks 找空地再选一格上方。
+- **可调用的函数**：仅限「上述控制原语」与 **Retrieved Skills 中列出的函数**（如 collectLogs、craftWoodenTool 等）。这些技能已注入执行环境，可按名调用，例如 `await collectLogs(bot, { quantity: 4 })`。不得编造未在「控制原语 + Retrieved Skills」中出现的函数名。
+
 ## 编写规则
 1. 写一个名称有意义的 `async function taskFunctionName(bot)` 函数。
 2. **优先使用控制原语**，不要调用 bot.dig / bot.craft / bot.openFurnace 等底层 API。
@@ -63,6 +68,10 @@ bot.inventory.items()                            // 返回背包物品 [{name, c
 8. bot.findBlocks 的 maxDistance 始终设为 32。
 9. 需要工作台时：先检查背包 → 没有则 craftItem("crafting_table") → placeItem 放置。
 10. 探索时每次随机选不同方向。
+11. placeItem 的第三个参数只传 `{x, y, z}` 对象；禁止使用 bot.vec3、pos.floored 或未列出的 API。
+12. **手持与任务匹配**：执行任何任务前，根据当前步骤判断应持有什么（空手、工具、消耗品等）。需要空手交互时先 `equipItem(bot, "air", "hand")`；需要挖掘/砍伐时先装备对应工具（镐→石头/矿石，斧→木头等）；需要使用时再装备对应物品。Equipment 与 Inventory 已提供，请据此决策。
+13. **代码与行为一致**：代码中的 bot.chat() 与注释必须与真实执行逻辑一致：不要写未实现的描述（例如写了「向飞行方向移动」就必须用实际方向或可观测量驱动移动，不能写固定方向）；若逻辑分支与 chat 描述对应，实现必须按该分支执行，不得简化成固定方向或占位逻辑。
+14. **非标准方块（草、花、树叶等）**：草、花、树叶、作物、藤蔓、蘑菇等均视为可挖掘/采集的方块，一律用 `mineBlock(bot, "block_name", count)` 与 `bot.findBlocks("block_name", 32, n)`；方块名用游戏内标准名，如草/草丛：short_grass、tall_grass、grass_block；花：poppy、dandelion、blue_orchid；树叶：oak_leaves、birch_leaves。任务涉及击打/采集/破坏此类方块时，必须用 mineBlock + 正确方块名；nearby_blocks 与 findBlocks 可确认当前环境中的方块名。
 
 ## 响应格式（严格遵守，缺一不可）
 
@@ -196,3 +205,38 @@ Output JSON: {"reasoning":"why","urgency":"high|medium|low","task":"one sentence
 AUTONOMOUS_HUMAN_TEMPLATE = """State: {game_state}
 Recent: {recent_memory}
 Next action? (JSON only):"""
+
+# 自主探索：智能下一任务生成器（参考 Voyager curriculum）
+AUTONOMOUS_TASK_GENERATOR_SYSTEM_PROMPT = """你是 Minecraft 自主探索的「下一任务生成器」。根据当前游戏状态、已学会的技能、近期经历、以及「参考成长路线指引」，输出一条适合作为下一步学习的任务（一句中文描述）。
+
+规则：
+- 生成下一任务时**优先参考「参考成长路线指引」**中的阶段与步骤，结合当前状态、已完成任务、已会技能，给出本阶段内的下一步任务。
+- 避免重复 failed_tasks 中的高难度任务；不要一上来就生成「用末影之眼找地牢」「驯服马」等，除非状态已具备条件。
+- 优先选择与当前背包/环境匹配、且与已会技能衔接的「略难一点」的任务。
+- 初级示例：挖若干泥土、砍一棵树、合成工作台、捡起附近掉落物。
+- 中级示例：挖矿、驯服一只动物、制作木镐。
+- 高级示例：多步骤合成链、末影之眼找要塞（需先有末影之眼等）。
+
+仅输出一个 JSON，无其他文字：
+{"reasoning":"简短说明为何选该任务","task":"一句任务描述"}"""
+
+AUTONOMOUS_TASK_GENERATOR_HUMAN_TEMPLATE = """参考成长路线指引（来自知识库 guide）:
+{guide_context}
+
+当前游戏状态:
+{game_state}
+
+已学会的技能（名称与描述）:
+{learned_skills}
+
+近期记忆:
+{recent_memory}
+
+已完成任务（自主模式）:
+{completed_tasks}
+
+已失败任务（避免重复）:
+{failed_tasks}
+{rag_knowledge_block}
+
+请生成下一个学习任务（JSON only）："""

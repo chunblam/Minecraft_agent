@@ -135,6 +135,42 @@ class SkillLibrary:
             lines.append("")
         return "\n".join(lines)
 
+    async def get_programs_code_list(self, query: str, top_k: int = 5) -> list[str]:
+        """
+        返回本次检索到的技能 code 列表，与 get_programs_string 共用 search_skills，
+        保证与注入 LLM context 的技能一致，供执行时注入 Node 环境。
+        """
+        results = await self.search_skills(query, top_k)
+        if not results:
+            return []
+        codes = []
+        for r in results:
+            sk = r.get("skill", r)
+            code = sk.get("code", "") if isinstance(sk, dict) else getattr(sk, "code", "") or ""
+            if code and code.strip():
+                codes.append(code.strip())
+        return codes
+
+    async def get_programs_context_and_codes(self, query: str, top_k: int = 5) -> tuple[str, list[str]]:
+        """
+        一次检索同时返回：格式化的技能上下文字符串 + 技能 code 列表。
+        保证 context 与 skill_codes 一致，供 prompt 与 execute 注入使用。
+        """
+        results = await self.search_skills(query, top_k)
+        if not results:
+            return "", []
+        lines = ["## Retrieved Skills (reuse these if applicable):\n"]
+        codes = []
+        for r in results:
+            sk = r["skill"]
+            lines.append(f"// {sk.get('description', '')}")
+            code = sk.get("code", "")
+            lines.append(code)
+            lines.append("")
+            if code and code.strip():
+                codes.append(code.strip())
+        return "\n".join(lines), codes
+
     # ── ChromaDB ─────────────────────────────────────────────────────────────
 
     def _init_chroma(self, persist_dir: str):

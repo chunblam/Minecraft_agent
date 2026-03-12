@@ -40,6 +40,7 @@ FOLDER_ROUTING: dict[str, str] = {
     "mob":        "mc_mob",           # 所有生物（统一放一个 collection，内部用 metadata 区分）
     "trade":      "mc_trading",       # 交易
     "base":       "mc_base",          # 基础知识
+    "guide":      "mc_guide",         # 成长指南
     # 如果以后你新增了文件夹，在这里加一行就行：
     # "crafting":   "mc_crafting",
     # "redstone":   "mc_redstone",

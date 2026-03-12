@@ -72,10 +72,39 @@ def delete_skill(skill_db_path: str, name: str) -> bool:
         return False
 
 
+def delete_all_skills(skill_db_path: str) -> int:
+    """删除技能库中全部技能。返回删除条数。"""
+    try:
+        import chromadb
+    except ImportError:
+        print("ChromaDB 未安装")
+        return 0
+
+    if not os.path.isdir(skill_db_path):
+        print(f"技能库目录不存在: {skill_db_path}")
+        return 0
+
+    names = list_skills(skill_db_path)
+    if not names:
+        print("当前无技能，无需删除。")
+        return 0
+
+    client = chromadb.PersistentClient(path=skill_db_path)
+    coll = client.get_or_create_collection("skills_v3")
+    try:
+        coll.delete(ids=names)
+        print(f"已删除全部技能，共 {len(names)} 条: {', '.join(names)}")
+        return len(names)
+    except Exception as e:
+        print(f"批量删除失败: {e}")
+        return 0
+
+
 def main():
-    parser = argparse.ArgumentParser(description="按名称删除一条技能")
+    parser = argparse.ArgumentParser(description="按名称删除一条技能，或删除全部技能")
     parser.add_argument("name", nargs="?", help="技能名称（与存储时的 name 一致）")
     parser.add_argument("--list", "-l", action="store_true", help="列出所有技能名称后退出")
+    parser.add_argument("--all", "-a", action="store_true", help="删除全部技能（会清空技能库）")
     parser.add_argument("--db", default="./data/skill_db", help="ChromaDB 路径")
     args = parser.parse_args()
 
@@ -91,9 +120,14 @@ def main():
             print(f"  {n}")
         return
 
+    if args.all:
+        n = delete_all_skills(skill_db_path)
+        sys.exit(0 if n >= 0 else 1)
+
     if not args.name or not args.name.strip():
-        print("请提供技能名称，或使用 --list 查看列表。")
+        print("请提供技能名称，或使用 --list 查看列表，或 --all 删除全部。")
         print("示例: python scripts/remove_skill.py chop_wood")
+        print("      python scripts/remove_skill.py --all")
         sys.exit(1)
 
     ok = delete_skill(skill_db_path, args.name.strip())

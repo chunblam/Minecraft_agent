@@ -136,8 +136,9 @@ app.post("/start", async (req, res) => {
 // 接收 LLM 生成的 async function，注入 bot 执行，返回 stdout + game_state
 //
 // Body:
-//   code       : string  — "async function taskName(bot) { ... }"
-//   timeout_ms : number  — 默认 60000ms
+//   code           : string   — "async function taskName(bot) { ... }"
+//   timeout_ms     : number  — 默认 60000ms
+//   injected_skills: string[] — 检索到的技能代码列表，与用户代码同作用域，供按名调用
 //
 // Response:
 //   { success, output, error, game_state }
@@ -146,8 +147,9 @@ app.post("/start", async (req, res) => {
 app.post("/execute_code", async (req, res) => {
     if (!bot) return res.status(400).json({ error: "Bot not started. Call /start first." });
 
-    const { code = "", timeout_ms = 60000 } = req.body;
+    const { code = "", timeout_ms = 60000, injected_skills } = req.body;
     if (!code.trim()) return res.status(400).json({ error: "code is empty" });
+    const skillBlocks = Array.isArray(injected_skills) ? injected_skills : [];
 
     // ── 捕获所有输出作为 observation ─────────────────────────────────────────
     const outputLines = [];
@@ -193,8 +195,10 @@ const equipItem = __ctx.equipItem;
 const eatFood = __ctx.eatFood;
 const activateNearestBlock = __ctx.activateNearestBlock;
 `;
+        const injectedSkillsCode = skillBlocks.filter(Boolean).join("\n\n");
         const wrappedCode = `
 ${contextCode}
+${injectedSkillsCode}
 ${code}
 
 // 自动调用：提取函数名并执行

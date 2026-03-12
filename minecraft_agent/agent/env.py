@@ -122,9 +122,15 @@ class MineflayerEnv:
         self,
         code: str,
         timeout_ms: int = 60000,
+        injected_skills: list[str] | None = None,
     ) -> dict:
         """
-        执行 LLM 生成的 async JS function。
+        执行 LLM 生成的 async JS function；可选注入检索到的技能代码供按名调用。
+
+        Args:
+            code: 用户生成的 async function 字符串
+            timeout_ms: 执行超时（毫秒）
+            injected_skills: 技能 code 列表，与 code 同作用域执行
 
         Returns:
             {
@@ -139,10 +145,13 @@ class MineflayerEnv:
 
         logger.log("FLOW", f"Env.execute_code(timeout_ms={timeout_ms}) → POST /execute_code")
         http_timeout = aiohttp.ClientTimeout(total=timeout_ms / 1000 + 10)
+        payload = {"code": code, "timeout_ms": timeout_ms}
+        if injected_skills:
+            payload["injected_skills"] = injected_skills
         try:
             async with self._session.post(
                 f"{self.server_url}/execute_code",
-                json={"code": code, "timeout_ms": timeout_ms},
+                json=payload,
                 timeout=http_timeout,
             ) as resp:
                 data = await resp.json()

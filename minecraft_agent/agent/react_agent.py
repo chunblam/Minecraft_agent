@@ -18,9 +18,11 @@ ReAct 对应关系：
   比 JSON 单步 ReAct 少 60-80% LLM 调用，执行连贯无 Python 往返
 """
 
-import asyncio, json, re, os
+import asyncio, copy, json, re, os
+from pathlib import Path
 from loguru import logger
 from .llm_router import LLMRouter
+from .trajectory_logger import save_task_trajectory
 from .memory import MemoryManager
 from .skill_library import SkillLibrary
 from .critic import CriticAgent
@@ -31,10 +33,15 @@ from .prompts import (
     CODE_GENERATION_SYSTEM_PROMPT, CODE_GENERATION_HUMAN_TEMPLATE,
     UNIFIED_CLASSIFY_PROMPT,
     AUTONOMOUS_SYSTEM_PROMPT, AUTONOMOUS_HUMAN_TEMPLATE,
+    AUTONOMOUS_TASK_GENERATOR_SYSTEM_PROMPT, AUTONOMOUS_TASK_GENERATOR_HUMAN_TEMPLATE,
 )
 
 MAX_RETRIES     = int(os.getenv("MAX_TASK_RETRIES", "4"))
 CODE_TIMEOUT_MS = int(os.getenv("CODE_TIMEOUT_MS",  "300000"))  # 单次任务执行上限 5 分钟
+
+# 自主探索课程状态持久化路径（与 minecraft_agent 目录相对）
+_AGENT_DIR = Path(__file__).resolve().parent
+AUTONOMOUS_CURRICULUM_PATH = _AGENT_DIR.parent / "data" / "autonomous_curriculum.json"
 
 
 class VoyagerAgent:
@@ -75,28 +82,141 @@ class VoyagerAgent:
         await self.memory.add_event("agent", result.get("display_message", ""), {})
         return result
 
-    async def run_autonomous(self, game_state: dict) -> dict:
-        """空闲时根据游戏状态自主决策并执行"""
-        recent  = self.memory.short_term.to_context_string()[-400:]
+    async def _get_next_autonomous_task(self, game_state: dict) -> str:
+        """根据游戏状态、技能库、记忆、指南 RAG、已完成/失败任务生成下一个学习任务。"""
+        completed_tasks, failed_tasks = self._load_autonomous_curriculum()
+        recent = self.memory.short_term.to_context_string()[-400:]
         trimmed = {k: v for k, v in game_state.items()
-                   if k in {"position","health","food","inventory",
-                             "nearby_entities","nearby_blocks","time","biome"}}
+                   if k in {"position", "health", "food", "inventory",
+                            "nearby_entities", "nearby_blocks", "time", "biome"}}
+        inv = game_state.get("inventory") or []
+        inv_text = json.dumps(inv, ensure_ascii=False)[:200]
+
+        # 构造 guide 检索 query
+        if len(completed_tasks) == 0:
+            guide_query = "阶段一 初始生存 第一步 采集木材 工作台"
+        else:
+            recent_done = completed_tasks[-2:] if len(completed_tasks) >= 2 else completed_tasks
+            guide_query = " ".join(recent_done) + " 下一步 阶段"
+            if "石镐" in inv_text or "iron_pickaxe" in inv_text:
+                guide_query = "石镐 挖矿 阶段二 地下探索"
+            elif "铁锭" in inv_text or "iron_ingot" in inv_text:
+                guide_query = "铁锭 铁制工具 阶段"
+
+        guide_context = "（暂无）"
+        if self.retriever:
+            try:
+                docs = await self.retriever.search(guide_query, collection_name="mc_guide", top_k=3)
+                if docs:
+                    parts = []
+                    for d in docs:
+                        title = d.get("title", "")
+                        content = d.get("content", "")
+                        if title:
+                            parts.append(f"[{title}]\n{content}")
+                        else:
+                            parts.append(content)
+                    guide_context = "\n\n".join(parts)
+            except Exception as e:
+                logger.debug(f"[Autonomous] mc_guide 检索失败: {e}")
+
+        rag_knowledge_block = ""
+        if self.retriever:
+            try:
+                rag_docs = await self.retriever.search("生存 进阶 下一步", top_k=2)
+                if rag_docs:
+                    rag_knowledge_block = "可选通用知识:\n" + "\n".join(d.get("content", "") for d in rag_docs)
+            except Exception:
+                pass
+
+        skills = self.skill_lib.list_all_skills()
+        learned_lines = []
+        for sk in (skills or [])[:25]:
+            name = sk.get("name", "")
+            desc = sk.get("description", "")
+            if name or desc:
+                learned_lines.append(f"- {name}: {desc}")
+        learned_skills = "\n".join(learned_lines) if learned_lines else "（暂无）"
+        completed_str = "\n".join(f"- {t}" for t in completed_tasks) if completed_tasks else "（暂无）"
+        failed_str = "\n".join(f"- {t}" for t in failed_tasks) if failed_tasks else "（暂无）"
+
+        # 进度 0 且无有效 guide 时可硬编码首任务
+        if len(completed_tasks) == 0 and guide_context == "（暂无）":
+            return "挖 1 个木头"
+
+        user = AUTONOMOUS_TASK_GENERATOR_HUMAN_TEMPLATE.format(
+            guide_context=guide_context,
+            game_state=json.dumps(trimmed, ensure_ascii=False),
+            learned_skills=learned_skills,
+            recent_memory=recent,
+            completed_tasks=completed_str,
+            failed_tasks=failed_str,
+            rag_knowledge_block=rag_knowledge_block,
+        )
         raw = await self.llm.think_fast(
-            system_prompt=AUTONOMOUS_SYSTEM_PROMPT,
-            user_prompt=AUTONOMOUS_HUMAN_TEMPLATE.format(
-                game_state=json.dumps(trimmed, ensure_ascii=False),
-                recent_memory=recent),
-            temperature=0.6)
+            system_prompt=AUTONOMOUS_TASK_GENERATOR_SYSTEM_PROMPT,
+            user_prompt=user,
+            temperature=0.6,
+        )
         if not raw:
-            return {"action_type": "chat", "display_message": "", "extra_data": {}}
+            return ""
         try:
             data = json.loads(self._strip_json(raw))
-            task = data.get("task", "")
+            return (data.get("task") or "").strip()
         except Exception:
-            return {"action_type": "chat", "display_message": "", "extra_data": {}}
+            return ""
+
+    def _load_autonomous_curriculum(self) -> tuple[list[str], list[str]]:
+        """加载已完成/失败任务列表。返回 (completed_tasks, failed_tasks)。"""
+        path = AUTONOMOUS_CURRICULUM_PATH
+        if not path.exists():
+            return [], []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return (
+                list(data.get("completed_tasks") or []),
+                list(data.get("failed_tasks") or []),
+            )
+        except Exception as e:
+            logger.debug(f"[Autonomous] 加载课程状态失败: {e}")
+            return [], []
+
+    def _save_autonomous_curriculum(self, completed_tasks: list[str], failed_tasks: list[str]) -> None:
+        """持久化已完成/失败任务列表。"""
+        path = AUTONOMOUS_CURRICULUM_PATH
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"completed_tasks": completed_tasks, "failed_tasks": failed_tasks}, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"[Autonomous] 保存课程状态失败: {e}")
+
+    def _update_autonomous_curriculum(self, task: str, success: bool) -> None:
+        """根据本次执行结果更新课程状态并持久化（dedup，completed 从 failed 中移除）。"""
+        completed, failed = self._load_autonomous_curriculum()
+        if success:
+            if task not in completed:
+                completed.append(task)
+            while task in failed:
+                failed.remove(task)
+        else:
+            if task not in failed:
+                failed.append(task)
+        completed = list(dict.fromkeys(completed))  # dedup keep order
+        self._save_autonomous_curriculum(completed, failed)
+
+    async def run_autonomous(self, game_state: dict) -> dict:
+        """空闲时由智能任务生成器产生下一任务并执行"""
+        task = await self._get_next_autonomous_task(game_state)
         if not task:
             return {"action_type": "chat", "display_message": "", "extra_data": {}}
-        logger.info(f"[Autonomous] {task}")
+        logger.info(f"[Autonomous] 当前任务: {task}")
+        try:
+            env = get_env()
+            await env.send_action("chat", {"message": f"[自主任务] {task}"})
+        except Exception as e:
+            logger.debug(f"[Autonomous] 发送任务到聊天失败: {e}")
         result = await self._run_task(task, game_state)
         return {"action_type": "chat", "display_message": f"[自主] {task}",
                 "extra_data": {"mode": "autonomous", **result.get("extra_data", {})}}
@@ -104,15 +224,23 @@ class VoyagerAgent:
     # ── ★ 核心：代码生成 + 执行循环 ──────────────────────────────────────────
 
     async def _run_task(self, task: str, game_state: dict,
-                        critique: str = "", context: str = "") -> dict:
+                        critique: str = "", context: str | dict = "") -> dict:
         # 技能库快速匹配：同质不同参时优先用已有技能代码并尝试参数替换执行
         fast_result = await self._try_skill_fast_path(task, game_state)
         if fast_result is not None:
+            self._update_autonomous_curriculum(task, fast_result.get("extra_data", {}).get("success", False))
             return fast_result
 
         logger.log("FLOW", f"_run_task → _build_context(task={task[:35]!r})")
         if not context:
             context = await self._build_context(task, game_state)
+        # 统一为 dict：context 与 skill_codes（供 prompt 与执行注入）
+        if isinstance(context, str):
+            ctx_dict = {"context": context, "skill_codes": []}
+        else:
+            ctx_dict = context
+        ctx_str = ctx_dict.get("context", "") or ""
+        skill_codes = ctx_dict.get("skill_codes") or []
 
         env         = get_env()
         last_code   = "N/A"
@@ -125,7 +253,7 @@ class VoyagerAgent:
 
             # 1. LLM 生成 async JS function（首次用流式以便 MC 聊天栏可提示「正在生成代码…」）
             prompt = self._build_code_prompt(
-                task, game_state, context,
+                task, game_state, ctx_str,
                 last_code, last_error, last_output, critique, attempt=attempt)
             if attempt == 1 and getattr(self, "on_code_gen_progress", None):
                 first_chunk = [True]
@@ -156,10 +284,13 @@ class VoyagerAgent:
             best_code = code
             logger.debug(f"[CodeLoop] 代码片段:\n{code[:200]}")
 
-            # 2. 执行代码 → /execute_code（Node.js 内连续执行，无 Python 往返）
+            # 2. 执行代码 → /execute_code（注入检索到的技能，供按名调用）
+            gs_before = copy.deepcopy(game_state)
             logger.log("FLOW", f"_run_task → Env.execute_code(timeout_ms={CODE_TIMEOUT_MS})")
             try:
-                exec_r = await env.execute_code(code=code, timeout_ms=CODE_TIMEOUT_MS)
+                exec_r = await env.execute_code(
+                    code=code, timeout_ms=CODE_TIMEOUT_MS, injected_skills=skill_codes
+                )
             except Exception as e:
                 last_error = str(e); last_output = ""
                 logger.error(f"[CodeLoop] execute_code 失败: {e}")
@@ -175,15 +306,65 @@ class VoyagerAgent:
             if not success_exec:
                 logger.warning(f"[CodeLoop] error={last_error[:80]}")
                 last_code = code
+                # 轨迹落盘：执行失败也记录，含传入 LLM 的 prompt/响应/RAG 便于核对
+                _prompt, _raw, _rag = prompt, raw, ctx_dict.get("rag_context", "")
+                def _write_trajectory_fail():
+                    save_task_trajectory(
+                        task=task,
+                        attempt=attempt,
+                        code=code,
+                        execution_success=False,
+                        execution_error=last_error,
+                        critic_ok=False,
+                        critic_message="",
+                        output=last_output,
+                        game_state_after=copy.deepcopy(game_state),
+                        skill_codes=skill_codes,
+                        game_state_before=gs_before,
+                        llm_prompt_user=_prompt,
+                        llm_response_raw=_raw,
+                        rag_context=_rag,
+                    )
+                try:
+                    asyncio.get_event_loop().run_in_executor(None, _write_trajectory_fail)
+                except Exception as e:
+                    logger.debug(f"[Trajectory] 后台写入跳过: {e}")
                 continue
 
             # 3. Critic 验证
             logger.log("FLOW", "_run_task → Critic.check_task_success")
             ok, new_crit = await self._critic_check(task, game_state, last_output)
             logger.info(f"[Critic] success={ok} | {new_crit[:60]}")
+
+            # 4. 轨迹落盘（含传入 LLM 的 prompt/响应/RAG，便于验证重试与 RAG）
+            _prompt, _raw, _rag = prompt, raw, ctx_dict.get("rag_context", "")
+            def _write_trajectory():
+                save_task_trajectory(
+                    task=task,
+                    attempt=attempt,
+                    code=code,
+                    execution_success=success_exec,
+                    execution_error=exec_r.get("error"),
+                    critic_ok=ok,
+                    critic_message=new_crit or "",
+                    output=last_output,
+                    game_state_after=copy.deepcopy(game_state),
+                    skill_codes=skill_codes,
+                    game_state_before=gs_before,
+                    llm_prompt_user=_prompt,
+                    llm_response_raw=_raw,
+                    rag_context=_rag,
+                )
+            try:
+                asyncio.get_event_loop().run_in_executor(None, _write_trajectory)
+            except Exception as e:
+                logger.debug(f"[Trajectory] 后台写入跳过: {e}")
+
             if ok:
                 logger.success("[Flow] 任务通过 Critic，后台存储技能")
                 asyncio.create_task(self._store_skill(task, best_code, last_output))
+                logger.info("[Task] 当前任务执行结束（成功）。")
+                self._update_autonomous_curriculum(task, True)
                 return {
                     "action_type":    "chat",
                     "display_message": f"✅ {task[:40]} 完成（{attempt} 次尝试）",
@@ -193,6 +374,8 @@ class VoyagerAgent:
             critique  = new_crit
             last_code = code
 
+        logger.info("[Task] 当前任务执行结束（已达最大尝试次数，未通过）。")
+        self._update_autonomous_curriculum(task, False)
         return {
             "action_type":    "chat",
             "display_message": f"尝试了 {MAX_RETRIES} 次，未能完成「{task}」。{critique}",
@@ -225,25 +408,39 @@ class VoyagerAgent:
                 st.status = "failed"; failed.append(st.name)
                 if not st.can_skip_if: break
         success = len(completed) >= len(subtasks) * 0.7
+        logger.info("[Task] 当前任务执行结束（层级任务）。")
         msg = (f"完成 {len(completed)}/{len(subtasks)} 子任务"
                + (f"（{','.join(completed)}）" if completed else "")
                + (f"，失败：{','.join(failed)}" if failed else ""))
         return {"action_type": "chat", "display_message": msg, "extra_data": {"success": success}}
 
-    # ── Context（三路并发：技能JS代码 + RAG知识 + 记忆）──────────────────────
+    # ── Context（技能 + RAG + 记忆，返回 dict 含 context 与 skill_codes）────────────────
 
-    async def _build_context(self, task: str, game_state: dict) -> str:
+    async def _build_context(self, task: str, game_state: dict) -> dict:
+        """
+        返回 {"context": str, "skill_codes": list[str]}。
+        context 用于 prompt；skill_codes 用于执行时注入 Node，供按名调用技能。
+        """
         logger.log("FLOW", "_build_context → skill+RAG+memory 三路并发")
-        s, r, m = await asyncio.gather(
-            self._fetch_skill_programs(task),
+        skill_str, skill_codes = "", []
+        try:
+            skill_str, skill_codes = await self.skill_lib.get_programs_context_and_codes(task, top_k=3)
+        except Exception as e:
+            logger.debug(f"技能检索失败: {e}")
+        r, m = await asyncio.gather(
             self._fetch_rag_context(task),
             self.memory.get_relevant_context(task),
             return_exceptions=True)
         parts = []
-        if isinstance(s, str) and s.strip(): parts.append(s)
-        if isinstance(r, str) and r.strip(): parts.append(r)
-        if isinstance(m, str) and m.strip(): parts.append(f"## Past Experience:\n{m}")
-        return "\n\n".join(parts)
+        if isinstance(skill_str, str) and skill_str.strip():
+            parts.append(skill_str)
+        rag_context = (r if isinstance(r, str) else "") or ""
+        if rag_context.strip():
+            parts.append(rag_context)
+        if isinstance(m, str) and m.strip():
+            parts.append(f"## Past Experience:\n{m}")
+        context_str = "\n\n".join(parts)
+        return {"context": context_str, "skill_codes": skill_codes or [], "rag_context": rag_context}
 
     async def _fetch_skill_programs(self, task: str) -> str:
         try: return await self.skill_lib.get_programs_string(task, top_k=3)
