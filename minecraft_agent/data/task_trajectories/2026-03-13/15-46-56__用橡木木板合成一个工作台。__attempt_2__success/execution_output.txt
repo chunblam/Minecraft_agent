@@ -1,0 +1,3 @@
+[chat] 开始用橡木木板合成工作台。
+[chat] 已合成 1 个 crafting_table
+[chat] 成功合成工作台。

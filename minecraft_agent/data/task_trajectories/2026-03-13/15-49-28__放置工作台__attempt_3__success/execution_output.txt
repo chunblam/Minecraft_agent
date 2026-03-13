@@ -1,0 +1,6 @@
+[chat] 背包中没有工作台，需要先合成一个。
+[chat] 已合成 1 个 crafting_table
+[chat] 已合成工作台。
+[chat] 将在位置 -541, 69, 595 放置工作台。
+[chat] 已放置 crafting_table 在 (-541,69,595)
+[chat] 工作台放置完成！

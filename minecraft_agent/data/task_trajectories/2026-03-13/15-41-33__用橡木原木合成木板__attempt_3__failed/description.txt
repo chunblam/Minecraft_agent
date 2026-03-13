@@ -1,0 +1,4 @@
+task: 用橡木原木合成木板
+attempt: 3
+success: False
+critic_ok: False

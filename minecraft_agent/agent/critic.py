@@ -83,10 +83,16 @@ class CriticAgent:
             # 简单成功关键词（可再细化）
             pass
 
-        # 「获取 N 个 X」类任务：对照背包数量
+        # 「获取 N 个 X」「再挖 N 个」「再收集 N 个」「再 N 个」类任务：对照背包数量
         m = re.search(r"(\d+)\s*个\s*(.+?)(?:\.|$|，|。)", task)
         if not m:
             m = re.search(r"采集\s*(\d+)\s*(.+?)(?:\.|$|，|。)", task)
+        if not m:
+            m = re.search(r"再\s*挖\s*(\d+)\s*个\s*(.+?)(?:\.|$|，|。)", task)
+        if not m:
+            m = re.search(r"再\s*收集\s*(\d+)\s*个\s*(.+?)(?:\.|$|，|。)", task)
+        if not m:
+            m = re.search(r"再\s*(\d+)\s*个\s*(.+?)(?:\.|$|，|。)", task)
         if m:
             want_count = int(m.group(1))
             name_hint = m.group(2).strip()
@@ -101,6 +107,15 @@ class CriticAgent:
                     return True, "背包数量已满足"
                 if total > 0:
                     return False, f"需要 {want_count} 个，当前只有 {total} 个"
+
+        # 「在工作台合成 X」「在熔炉烧 X」等：背包有目标产物 或 附近有设施且执行输出表明已使用
+        nb = game_state.get("nearby_blocks") or {}
+        if isinstance(nb, dict):
+            has_table = (nb.get("crafting_table") or 0) > 0
+            has_furnace = (nb.get("furnace") or nb.get("lit_furnace") or 0) > 0
+            if ("工作台" in task or "熔炉" in task) and (has_table or has_furnace):
+                if "已合成" in out_lower or "成功" in out_lower or "已烧" in out_lower or "已冶炼" in out_lower:
+                    return True, "已在工作台/熔炉完成操作"
 
         return None
 
@@ -128,6 +143,13 @@ class CriticAgent:
         else:
             inv_str = str(inventory) or "empty"
 
+        # 附近方块（地图上已有的设施等）
+        nb = game_state.get("nearby_blocks", {})
+        if isinstance(nb, dict):
+            nb_str = ", ".join(f"{k}:{v}" for k, v in list(nb.items())[:20]) or "none"
+        else:
+            nb_str = str(nb) or "none"
+
         # 附近实体
         entities = game_state.get("nearby_entities", [])
         if isinstance(entities, list):
@@ -144,6 +166,7 @@ class CriticAgent:
             task=task,
             position=position_str,
             inventory=inv_str,
+            nearby_blocks=nb_str,
             nearby_entities=ent_str,
             health=health,
             last_output=last_observation[:500] if last_observation else "N/A",

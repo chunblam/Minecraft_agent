@@ -1,0 +1,29 @@
+[chat] 背包中没有云杉原木，需要先收集一些。
+[chat] 当前有 0 个 spruce_log，需要再收集 3 个
+[chat] 开始第 1 次尝试收集 spruce_log 原木
+[chat] 找到 spruce_log 原木在 -343, 115, 291
+[chat] 已到达 (-343,115,291) 附近
+[chat] 已挖掘 1 个 spruce_log
+[chat] 成功破坏1个 spruce_log 原木并捡起掉落物。
+[chat] 收集后现在有 1 个 spruce_log 原木
+[chat] 开始第 2 次尝试收集 spruce_log 原木
+[chat] 找到 spruce_log 原木在 -343, 119, 291
+[chat] 已到达 (-343,119,291) 附近
+[chat] 挖掘 spruce_log 时出错: Took to long to decide path to goal!
+[chat] 已挖掘 0 个 spruce_log
+[chat] 成功破坏1个 spruce_log 原木并捡起掉落物。
+[chat] 收集后现在有 2 个 spruce_log 原木
+[chat] 开始第 3 次尝试收集 spruce_log 原木
+[chat] 找到 spruce_log 原木在 -343, 120, 291
+[chat] 已到达 (-343,120,291) 附近
+[chat] 已挖掘 1 个 spruce_log
+[chat] 成功破坏1个 spruce_log 原木并捡起掉落物。
+[chat] 收集后现在有 3 个 spruce_log 原木
+[chat] 已收集足够 spruce_log 原木，当前 3 个
+[chat] 任务完成！总共收集了 3 个 spruce_log 原木
+[chat] 背包中有 3 个云杉原木。
+[chat] 已空手
+[chat] 发现附近有工作台，前往使用。
+[chat] 已到达 (-342,101,290) 附近
+[chat] 开始在工作台中将 3 个云杉原木合成为 12 个云杉木板。
+[ERROR] Error: missing ingredient

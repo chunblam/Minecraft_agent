@@ -1,0 +1,16 @@
+{
+  "name": "collectMoreLogs",
+  "description": "收集指定数量的橡木原木",
+  "code": "async function collectMoreLogs(bot, params = {}) { \n    const logType = params.logType || 'oak_log';\n    const targetCount = params.targetCount || 3;\n    const maxAttempts = params.maxAttempts || 10;\n    bot.chat(`当前有 ${bot.inventory.items().find(item => item.name === logType)?.count || 0} 个 ${logType}，需要再收集 ${targetCount} 个`);\n    let currentCount = bot.inventory.items().find(item => item.name === logType)?.count || 0;\n    let attempts = 0;\n    while (currentCount < targetCount && attempts < maxAttempts) {\n        attempts++;\n        bot.chat(`开始第 ${attempts} 次尝试收集 ${logType} 原木`);\n        await breakOneLog(bot, { logType });\n        currentCount = bot.inventory.items().find(item => item.name === logType)?.count || 0;\n        bot.chat(`收集后现在有 ${currentCount} 个 ${logType} 原木`);\n        if (currentCount >= targetCount) {\n            bot.chat(`已收集足够 ${logType} 原木，当前 ${currentCount} 个`);\n            break;\n        }\n    }\n    const finalCount = bot.inventory.items().find(item => item.name === logType)?.count || 0;\n    if (finalCount >= targetCount) {\n        bot.chat(`任务完成！总共收集了 ${finalCount} 个 ${logType} 原木`);\n    } else {\n        bot.chat(`未能收集足够 ${logType} 原木，当前只有 ${finalCount} 个`);\n    }\n}",
+  "parameters": {
+    "logType": "原木类型，默认为 'oak_log'",
+    "targetCount": "需要收集的数量，默认为 3",
+    "maxAttempts": "最大尝试次数，默认为 10"
+  },
+  "preconditions": [
+    "bot必须连接到游戏世界且有足够的空间来存储收集的原木"
+  ],
+  "reliability_score": 1.0,
+  "success_count": 1,
+  "fail_count": 0
+}

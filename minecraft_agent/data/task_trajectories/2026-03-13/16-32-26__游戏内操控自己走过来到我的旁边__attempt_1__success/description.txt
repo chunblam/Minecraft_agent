@@ -1,0 +1,4 @@
+task: 游戏内操控自己走过来到我的旁边
+attempt: 1
+success: True
+critic_ok: True

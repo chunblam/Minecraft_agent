@@ -1,0 +1,111 @@
+[chat] 当前有 0 朵小花，需要采集 10 朵
+[chat] 找到 azure_bluet 在 -351, 116, 303
+[chat] 已到达 (-351,116,303) 附近
+[chat] 挖掘 azure_bluet 时出错: Took to long to decide path to goal!
+[chat] 已挖掘 0 个 azure_bluet
+[chat] 采集后现在有 0 朵小花
+[chat] 找到 azure_bluet 在 -351, 116, 303
+[chat] 已到达 (-351,116,303) 附近
+[chat] 已挖掘 1 个 azure_bluet
+[chat] 采集后现在有 0 朵小花
+[chat] 找到 azure_bluet 在 -351, 116, 304
+[chat] 已到达 (-351,116,304) 附近
+[chat] 挖掘 azure_bluet 时出错: Took to long to decide path to goal!
+[chat] 已挖掘 0 个 azure_bluet
+[chat] 采集后现在有 0 朵小花
+[chat] 找到 azure_bluet 在 -347, 115, 299
+[chat] 已到达 (-347,115,299) 附近
+[chat] 已挖掘 1 个 azure_bluet
+[chat] 采集后现在有 1 朵小花
+[chat] 找到 dandelion 在 -346, 115, 301
+[chat] 已到达 (-346,115,301) 附近
+[chat] 已空手
+[chat] 挖掘 dandelion 时出错: Took to long to decide path to goal!
+[chat] 已挖掘 0 个 dandelion
+[chat] 采集后现在有 1 朵小花
+[chat] 找到 dandelion 在 -346, 115, 301
+[chat] 已到达 (-346,115,301) 附近
+[chat] 已挖掘 1 个 dandelion
+[chat] 采集后现在有 2 朵小花
+[chat] 找到 dandelion 在 -346, 115, 302
+[chat] 已到达 (-346,115,302) 附近
+[chat] 已空手
+[chat] 挖掘 dandelion 时出错: Took to long to decide path to goal!
+[chat] 已挖掘 0 个 dandelion
+[chat] 采集后现在有 2 朵小花
+[chat] 找到 azure_bluet 在 -345, 115, 302
+[chat] 已到达 (-345,115,302) 附近
+[chat] 挖掘 azure_bluet 时出错: Took to long to decide path to goal!
+[chat] 已挖掘 0 个 azure_bluet
+[chat] 采集后现在有 2 朵小花
+[chat] 找到 azure_bluet 在 -345, 115, 302
+[chat] 已到达 (-345,115,302) 附近
+[chat] 已挖掘 1 个 azure_bluet
+[chat] 采集后现在有 3 朵小花
+[chat] 找到 azure_bluet 在 -345, 115, 303
+[chat] 已到达 (-345,115,303) 附近
+[chat] 已空手
+[chat] 挖掘 azure_bluet 时出错: Took to long to decide path to goal!
+[chat] 已挖掘 0 个 azure_bluet
+[chat] 采集后现在有 3 朵小花
+[chat] 找到 azure_bluet 在 -345, 115, 303
+[chat] 已到达 (-345,115,303) 附近
+[chat] 已挖掘 1 个 azure_bluet
+[chat] 采集后现在有 4 朵小花
+[chat] 找到 azure_bluet 在 -345, 115, 305
+[chat] 已到达 (-345,115,305) 附近
+[chat] 已空手
+[chat] 挖掘 azure_bluet 时出错: Took to long to decide path to goal!
+[chat] 已挖掘 0 个 azure_bluet
+[chat] 采集后现在有 4 朵小花
+[chat] 找到 azure_bluet 在 -345, 115, 305
+[chat] 已到达 (-345,115,305) 附近
+[chat] 已挖掘 1 个 azure_bluet
+[chat] 采集后现在有 5 朵小花
+[chat] 找到 azure_bluet 在 -343, 115, 305
+[chat] 已到达 (-343,115,305) 附近
+[chat] 已空手
+[chat] 挖掘 azure_bluet 时出错: Took to long to decide path to goal!
+[chat] 已挖掘 0 个 azure_bluet
+[chat] 采集后现在有 5 朵小花
+[chat] 找到 azure_bluet 在 -343, 115, 305
+[chat] 已到达 (-343,115,305) 附近
+[chat] 已挖掘 1 个 azure_bluet
+[chat] 采集后现在有 6 朵小花
+[chat] 找到 dandelion 在 -346, 115, 302
+[chat] 已到达 (-346,115,302) 附近
+[chat] 已空手
+[chat] 挖掘 dandelion 时出错: Took to long to decide path to goal!
+[chat] 已挖掘 0 个 dandelion
+[chat] 采集后现在有 6 朵小花
+[chat] 找到 dandelion 在 -346, 115, 302
+[chat] 已到达 (-346,115,302) 附近
+[chat] 已挖掘 1 个 dandelion
+[chat] 采集后现在有 7 朵小花
+[chat] 找到 dandelion 在 -347, 115, 302
+[chat] 已到达 (-347,115,302) 附近
+[chat] 已空手
+[chat] 挖掘 dandelion 时出错: Took to long to decide path to goal!
+[chat] 已挖掘 0 个 dandelion
+[chat] 采集后现在有 7 朵小花
+[chat] 找到 dandelion 在 -347, 115, 302
+[chat] 已到达 (-347,115,302) 附近
+[chat] 已挖掘 1 个 dandelion
+[chat] 采集后现在有 8 朵小花
+[chat] 找到 dandelion 在 -349, 116, 302
+[chat] 已到达 (-349,116,302) 附近
+[chat] 已空手
+[chat] 挖掘 dandelion 时出错: Took to long to decide path to goal!
+[chat] 已挖掘 0 个 dandelion
+[chat] 采集后现在有 9 朵小花
+[chat] 找到 dandelion 在 -350, 116, 303
+[chat] 已到达 (-350,116,303) 附近
+[chat] 已空手
+[chat] 挖掘 dandelion 时出错: Took to long to decide path to goal!
+[chat] 已挖掘 0 个 dandelion
+[chat] 采集后现在有 9 朵小花
+[chat] 找到 dandelion 在 -350, 116, 303
+[chat] 已到达 (-350,116,303) 附近
+[chat] 已挖掘 1 个 dandelion
+[chat] 采集后现在有 10 朵小花
+[chat] 任务完成！成功采集了10朵小花

@@ -1,0 +1,5 @@
+[chat] 背包中没有工作台，需要合成一个。
+[chat] 已合成 1 个 crafting_table
+[chat] 成功合成工作台。
+[chat] 放置工作台在位置 -540, 69, 596
+[ERROR] Event blockUpdate:(-540, 69, 596) did not fire within timeout of 5000ms

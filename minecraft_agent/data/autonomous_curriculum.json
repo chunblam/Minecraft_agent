@@ -1,0 +1,17 @@
+{
+  "completed_tasks": [
+    "用手破坏1个橡木原木",
+    "再挖3个橡木原木",
+    "用橡木木板合成一个工作台。",
+    "放置工作台",
+    "游戏内操控自己走过来到我的旁边",
+    "帮我采集10朵小花",
+    "Find and punch a tree to get at least 2 wood logs",
+    "Select chest from hotbar and right-click on ground to place it"
+  ],
+  "failed_tasks": [
+    "用橡木原木合成木板",
+    "Open inventory crafting grid and convert wood logs into wooden planks",
+    "Open crafting table or inventory grid and arrange planks in 3x3 pattern leaving center empty"
+  ]
+}

@@ -1,0 +1,40 @@
+Explain: 这是新任务，没有上一轮错误。任务要求：找到并击打一棵树，获得至少2个原木。当前环境：附近有云杉原木（spruce_log:10），没有橡木原木。背包里只有花和泥土，没有工具。需要用手破坏原木（mineBlock会自动用空手）。由于已有技能 breakOneLog 和 collectMoreLogs，我们可以直接调用 collectMoreLogs 来收集至少2个云杉原木。
+
+Plan:
+1. 检查背包中是否有云杉原木（spruce_log），确定当前数量。
+2. 如果不足2个，调用 collectMoreLogs 技能，指定 logType 为 'spruce_log'，targetCount 为 2。
+3. 技能会自动寻找、破坏原木并捡起掉落物，直到收集足够或达到尝试次数。
+4. 完成后报告结果。
+
+Code:
+```javascript
+async function punchTreeForLogs(bot) {
+    // 任务：找到并击打一棵树，获得至少2个原木
+    bot.chat("开始任务：击打树木获取至少2个原木。");
+    
+    // 检查当前背包中的原木数量（云杉原木）
+    const logType = "spruce_log";
+    let currentLogs = bot.inventory.items().find(item => item.name === logType);
+    let currentCount = currentLogs ? currentLogs.count : 0;
+    bot.chat(`当前背包中有 ${currentCount} 个 ${logType}。`);
+    
+    // 如果已有足够原木，直接完成
+    if (currentCount >= 2) {
+        bot.chat("已有至少2个原木，任务完成！");
+        return;
+    }
+    
+    // 使用已有技能收集更多原木
+    bot.chat("开始收集云杉原木...");
+    await collectMoreLogs(bot, { logType: logType, targetCount: 2 });
+    
+    // 最终检查
+    currentLogs = bot.inventory.items().find(item => item.name === logType);
+    currentCount = currentLogs ? currentLogs.count : 0;
+    if (currentCount >= 2) {
+        bot.chat(`成功收集了 ${currentCount} 个云杉原木，任务完成！`);
+    } else {
+        bot.chat(`只收集到 ${currentCount} 个云杉原木，未达到2个。`);
+    }
+}
+```

@@ -1,0 +1,12 @@
+{
+  "name": "moveToPlayer",
+  "description": "移动到玩家位置并到达玩家身边",
+  "code": "async function moveToPlayer(bot, params = {}) { \n    const playerEntity = bot.nearestEntity(entity => entity.name === 'player' && entity !== bot.entity);\n    if (!playerEntity) {\n        bot.chat('未找到玩家，尝试探索寻找。');\n        const directions = ['north', 'south', 'east', 'west'];\n        const randomDir = directions[Math.floor(Math.random() * directions.length)];\n        await exploreUntil(bot, randomDir, 100, () => {\n            const found = bot.nearestEntity(entity => entity.name === 'player' && entity !== bot.entity);\n            return found !== null;\n        });\n        const newPlayer = bot.nearestEntity(entity => entity.name === 'player' && entity !== bot.entity);\n        if (!newPlayer) {\n            throw new Error('探索后仍未找到玩家');\n        }\n        const targetPos = newPlayer.position;\n        bot.chat(`找到玩家在 ${targetPos.x.toFixed(1)}, ${targetPos.y.toFixed(1)}, ${targetPos.z.toFixed(1)}`);\n        await moveToPosition(bot, targetPos.x, targetPos.y, targetPos.z, 2);\n        bot.chat('已到达玩家身边！');\n        return;\n    }\n    const targetPos = playerEntity.position;\n    bot.chat(`玩家在 ${targetPos.x.toFixed(1)}, ${targetPos.y.toFixed(1)}, ${targetPos.z.toFixed(1)}，正在移动过去。`);\n    await moveToPosition(bot, targetPos.x, targetPos.y, targetPos.z, 2);\n    bot.chat('已到达玩家身边！');\n}",
+  "parameters": {},
+  "preconditions": [
+    "bot must be able to detect and move towards entities"
+  ],
+  "reliability_score": 1.0,
+  "success_count": 1,
+  "fail_count": 0
+}

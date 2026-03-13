@@ -1,0 +1,4 @@
+task: Select chest from hotbar and right-click on ground to place it
+attempt: 4
+success: True
+critic_ok: True

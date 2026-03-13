@@ -1,0 +1,186 @@
+Code from the last round: async function placeWorkbench(bot) {
+    // 1. 检查背包中是否有工作台
+    const workbench = bot.inventory.items().find(item => item.name === 'crafting_table');
+    if (!workbench) {
+        bot.chat("背包中没有工作台，需要先合成一个。");
+        // 检查是否有足够的橡木木板来合成工作台
+        const planks = bot.inventory.items().find(item => item.name === 'oak_planks');
+        if (!planks || planks.count < 4) {
+            bot.chat("橡木木板不足，需要先收集原木制作木板。");
+            // 使用已注入的技能 collectMoreLogs 收集原木
+            await collectMoreLogs(bot, { logType: 'oak_log', targetCount: 1 });
+            // 合成木板
+            await craftItem(bot, 'oak_planks', 4);
+        }
+        // 合成工作台
+        await craftItem(bot, 'crafting_table', 1);
+        bot.chat("已合成工作台。");
+    } else {
+        bot.chat(`背包中有 ${workbench.count} 个工作台。`);
+    }
+
+    // 2. 寻找合适的放置位置
+    // 从当前位置附近找一个固体方块（例如草方块、泥土、石头）
+    let solidBlocks = bot.findNearbyBlocks('grass_block', 32, 10)
+        .concat(bot.findNearbyBlocks('dirt', 32, 10))
+        .concat(bot.findNearbyBlocks('stone', 32, 10));
+    if (solidBlocks.length === 0) {
+        bot.chat("附近没有找到合适的固体方块，移动一下寻找。");
+        // 随机方向探索寻找固体方块
+        const directions = ['north', 'south', 'east', 'west'];
+        const randomDir = directions[Math.floor(Math.random() * directions.length)];
+        await exploreUntil(bot, randomDir, 64, () => {
+            const found = bot.findNearbyBlocks('grass_block', 32, 10)
+                .concat(bot.findNearbyBlocks('dirt', 32, 10))
+                .concat(bot.findNearbyBlocks('stone', 32, 10));
+            return found.length > 0;
+        });
+        // 重新获取固体方块
+        solidBlocks = bot.findNearbyBlocks('grass_block', 32, 10)
+            .concat(bot.findNearbyBlocks('dirt', 32, 10))
+            .concat(bot.findNearbyBlocks('stone', 32, 10));
+        if (solidBlocks.length === 0) {
+            throw new Error("探索后仍未找到合适的固体方块放置工作台");
+        }
+    }
+    
+    // 选择第一个固体方块，取其上方一格作为放置位置
+    const baseBlock = solidBlocks[0];
+    const placePos = { x: baseBlock.x, y: baseBlock.y + 1, z: baseBlock.z };
+    
+    // 确保放置位置不在bot脚下（与当前位置水平距离至少2格）
+    const botPos = bot.entity.position;
+    const dx = placePos.x - botPos.x;
+    const dz = placePos.z - botPos.z;
+    const distSq = dx * dx + dz * dz;
+    if (distSq < 4) { // 距离小于2格
+        bot.chat("放置位置太近，寻找另一个位置。");
+        // 找另一个固体方块
+        for (const block of solidBlocks) {
+            const candidatePos = { x: block.x, y: block.y + 1, z: block.z };
+            const dx2 = candidatePos.x - botPos.x;
+            const dz2 = candidatePos.z - botPos.z;
+            if (dx2 * dx2 + dz2 * dz2 >= 4) {
+                // 找到合适位置
+                bot.chat(`将在位置 ${candidatePos.x}, ${candidatePos.y}, ${candidatePos.z} 放置工作台。`);
+                await placeItem(bot, 'crafting_table', candidatePos);
+                bot.chat("工作台放置完成！");
+                return;
+            }
+        }
+        // 如果所有候选位置都太近，先移动一下
+        bot.chat("所有候选位置都太近，先移动一下。");
+        await moveToPosition(bot, botPos.x + 3, botPos.y, botPos.z, 2);
+        // 重新寻找固体方块
+        solidBlocks = bot.findNearbyBlocks('grass_block', 32, 10)
+            .concat(bot.findNearbyBlocks('dirt', 32, 10))
+            .concat(bot.findNearbyBlocks('stone', 32, 10));
+        if (solidBlocks.length === 0) {
+            throw new Error("移动后仍未找到合适的固体方块");
+        }
+        const newBase = solidBlocks[0];
+        placePos.x = newBase.x;
+        placePos.y = newBase.y + 1;
+        placePos.z = newBase.z;
+    }
+    
+    bot.chat(`将在位置 ${placePos.x}, ${placePos.y}, ${placePos.z} 放置工作台。`);
+    
+    // 3. 直接放置工作台（placeItem会自动处理装备）
+    await placeItem(bot, 'crafting_table', placePos);
+    bot.chat("工作台放置完成！");
+}
+Execution error: N/A
+Chat log: [chat] 背包中有 1 个工作台。
+[chat] 放置位置太近，寻找另一个位置。
+[chat] 将在位置 -541, 69, 596 放置工作台。
+[chat] 挖掘 oak_log 时出错: The goal was changed before it could be completed!
+[chat] 已挖掘 0 个 oak_log
+[chat] 成功破坏1个 oak_log 原木并捡起掉落物。
+[chat] 收集后现在有 4 个 oak_log 原木
+[chat] 已收集足够 oak_log 原木，当前 4 个
+[chat] 任务完成！总共收集了 4 个 oak_log 原木
+[c
+Biome: 21
+Time: day
+Nearby blocks: stone:665, coal_ore:7, dirt:344, grass_block:134, oak_leaves:233, birch_leaves:7, short_grass:4, oak_log:26, diorite:8, gravel:14, copper_ore:3, granite:2
+Nearby entities: item(2.3m), bat(22m), player(27.5m)
+Health: 20 / 20
+Hunger: 20 / 20
+Position: x=-539.5, y=69, z=597.5
+Equipment: nothing
+Inventory (2/36): oak_planksx52, oak_saplingx4
+Task: 放置工作台
+Context: ## Retrieved Skills (reuse these if applicable):
+
+// 用手破坏指定类型的1个原木
+async function breakOneLog(bot, params = {}) { 
+    const logType = params.logType || 'oak_log';
+    // 1. 寻找附近的原木
+    const logs = bot.findNearbyBlocks(logType, 32, 10);
+    if (logs.length === 0) {
+        bot.chat(`附近没有找到 ${logType} 原木，开始探索寻找。`);
+        // 随机选择一个方向探索
+        const directions = ['north', 'south', 'east', 'west'];
+        const randomDir = directions[Math.floor(Math.random() * directions.length)];
+        await exploreUntil(bot, randomDir, 64, () => {
+            const foundLogs = bot.findNearbyBlocks(logType, 32, 10);
+            return foundLogs.length > 0;
+        });
+    }
+    // 重新获取原木位置
+    const logsAfter = bot.findNearbyBlocks(logType, 32, 10);
+    if (logsAfter.length === 0) {
+        throw new Error(`探索后仍未找到 ${logType} 原木`);
+    }
+    const targetLog = logsAfter[0];
+    bot.chat(`找到 ${logType} 原木在 ${targetLog.x}, ${targetLog.y}, ${targetLog.z}`);
+
+    // 2. 移动到原木附近（距离2格以内）
+    await moveToPosition(bot, targetLog.x, targetLog.y, targetLog.z, 2);
+
+    // 3. 破坏1个原木（mineBlock会自动使用空手）
+    await mineBlock(bot, logType, 1);
+
+    // 4. 捡起掉落的物品
+    await pickupNearbyItems(bot);
+    bot.chat(`成功破坏1个 ${logType} 原木并捡起掉落物。`);
+}
+
+// 收集指定数量的橡木原木
+async function collectMoreLogs(bot, params = {}) { 
+    const logType = params.logType || 'oak_log';
+    const targetCount = params.targetCount || 3;
+    const maxAttempts = params.maxAttempts || 10;
+    bot.chat(`当前有 ${bot.inventory.items().find(item => item.name === logType)?.count || 0} 个 ${logType}，需要再收集 ${targetCount} 个`);
+    let currentCount = bot.inventory.items().find(item => item.name === logType)?.count || 0;
+    let attempts = 0;
+    while (currentCount < targetCount && attempts < maxAttempts) {
+        attempts++;
+        bot.chat(`开始第 ${attempts} 次尝试收集 ${logType} 原木`);
+        await breakOneLog(bot, { logType });
+        currentCount = bot.inventory.items().find(item => item.name === logType)?.count || 0;
+        bot.chat(`收集后现在有 ${currentCount} 个 ${logType} 原木`);
+        if (currentCount >= targetCount) {
+            bot.chat(`已收集足够 ${logType} 原木，当前 ${currentCount} 个`);
+            break;
+        }
+    }
+    const finalCount = bot.inventory.items().find(item => item.name === logType)?.count || 0;
+    if (finalCount >= targetCount) {
+        bot.chat(`任务完成！总共收集了 ${finalCount} 个 ${logType} 原木`);
+    } else {
+        bot.chat(`未能收集足够 ${logType} 原木，当前只有 ${finalCount} 个`);
+    }
+}
+
+// 用橡木木板合成一个工作台。
+async function craftWorkbench(bot, params = {}) { const { plankCount = 4 } = params; const planks = bot.inventory.items().find(item => item.name === 'oak_planks'); if (!planks || planks.count < plankCount) { bot.chat('橡木木板不足，需要至少 {} 个。', plankCount); if (params.logCount && params.logCount >= 1) { bot.chat('用橡木原木合成橡木木板。'); await craftItem(bot, 'oak_planks', plankCount); } else { throw new Error('没有足够的橡木原木来合成木板。'); } } bot.chat('开始用橡木木板合成工作台。'); await craftItem(bot, 'crafting_table', 1); bot.chat('成功合成工作台。'); }
+
+
+## Past Experience:
+
+【近期对话记录】
+[user]: Removed 14 item(s) from player Agent]
+Critique: 任务描述是放置工作台，但实际执行过程中使用了合成木板并放置工作台，这与任务要求不符。需要直接放置工作台，而不是先合成木板。
+[重试要求] 请更保守：增加距离/背包检查、使用 exploreUntil 等容错手段，避免重复上次失败做法。

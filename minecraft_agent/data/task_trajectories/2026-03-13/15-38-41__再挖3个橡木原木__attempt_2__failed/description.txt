@@ -1,0 +1,4 @@
+task: 再挖3个橡木原木
+attempt: 2
+success: False
+critic_ok: False

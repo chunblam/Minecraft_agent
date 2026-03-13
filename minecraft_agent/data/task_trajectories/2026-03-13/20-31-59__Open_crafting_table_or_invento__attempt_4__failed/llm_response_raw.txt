@@ -1,0 +1,87 @@
+Explain: 上次代码在放置工作台后，尝试激活工作台时超时。错误 `Event blockUpdate:(-341, 102, 293) did not fire within timeout of 5000ms` 表明 `activateNearestBlock` 等待方块更新事件超时。可能原因：放置的工作台位置可能被阻挡（如上方有方块），或者放置后 bot 距离过远/角度不对导致无法右键激活。从 Chat log 看，工作台被放置在 `-341, 102, 293`，而 bot 位置是 `x=-341.4, y=102, z=291.5`，两者在 x 和 z 上接近（x 差 0.4，z 差 1.5），但 y 相同（都是 102）。这意味着工作台与 bot 在同一水平面，可能 bot 站在了工作台所在的同一格？实际上，放置位置是 `ground.y + 1`，而 bot 的 y 也是 102，说明地面在 y=101，工作台在 y=102，bot 也站在 y=102（可能站在相邻方块上）。但 `activateNearestBlock` 需要 bot 能右键到工作台，如果 bot 与工作台占据同一空间（重叠）或太近，可能无法激活。代码中虽然检查了 bot 位置并调整了放置位置，但调整后 `placePos.x += 2; placePos.z += 2;` 可能仍不够远（因为 botPos.x 是 -341.4，placePos.x 变成 -339，差 2.4；z 从 291.5 到 293，差 1.5），仍可能重叠或阻挡。此外，放置后 `moveToPosition(bot, placePos.x, placePos.y, placePos.z, 2)` 试图移动到工作台 2 格内，但目标坐标是工作台位置，可能使 bot 过于接近。更好的做法：放置工作台后，移动到工作台旁边但保持一定距离（例如侧方 1-2 格），然后使用 `activateNearestBlock`，该函数会寻找最近的工作台并右键。另外，应确保放置位置是空气且上方无阻挡。
+
+Plan:
+1. 检查背包云杉木板数量，确保至少 4 个。
+2. 扫描附近是否有 crafting_table（利用 nearby_blocks 信息），若有则直接寻路过去并激活。
+3. 若无，则合成工作台（已有 crafting_tablex1 在背包，无需再合成）。
+4. 寻找合适地面放置工作台：使用 findNearbyBlocks 找 grass_block、dirt、stone 等，选择第一个找到的地面方块。
+5. 计算放置位置：地面上方一格（y+1），确保该位置是空气（可通过检查附近方块类型，但简单起见假设可放置）。同时检查 bot 当前位置，若与放置位置水平距离小于 2，则向随机方向偏移 3 格以避免重叠。
+6. 放置工作台：使用 placeItem。
+7. 移动到放置位置旁边但保持 2 格水平距离：计算目标点，例如从放置位置向 x 或 z 方向移动 2 格，y 相同。
+8. 激活工作台：使用 activateNearestBlock。
+9. 报告完成。
+
+注意：从 Inventory 看已有 crafting_tablex1，所以无需合成，直接放置即可。另外，任务要求“Open crafting table or inventory grid and arrange planks in 3x3 pattern leaving center empty”，但我们的代码只需打开工作台，排列木板由用户手动完成？实际上，控制原语中没有自动排列合成网格的函数，所以只需打开工作台即可，后续由用户操作。因此，函数目标：确保工作台被打开，以便玩家可以排列木板。
+
+Code:
+```javascript
+async function arrangePlanksInCraftingGrid(bot) {
+    // 1. 检查背包云杉木板
+    const planks = bot.inventory.items().find(item => item.name === "spruce_planks");
+    if (!planks || planks.count < 4) {
+        throw new Error("需要至少4个云杉木板来排列3x3图案");
+    }
+    bot.chat(`背包中有${planks.count}个云杉木板，足够排列。`);
+
+    // 2. 寻找附近的工作台（利用 nearby_blocks 信息）
+    const craftingTables = bot.findNearbyBlocks("crafting_table", 32, 5);
+    if (craftingTables.length > 0) {
+        const tablePos = craftingTables[0];
+        bot.chat(`发现工作台在 ${tablePos.x}, ${tablePos.y}, ${tablePos.z}，前往使用。`);
+        await moveToPosition(bot, tablePos.x, tablePos.y, tablePos.z, 2);
+        await activateNearestBlock(bot, "crafting_table");
+        bot.chat("工作台已打开，可以排列云杉木板成3x3图案（中心留空）。");
+        return;
+    }
+
+    // 3. 检查背包是否有工作台
+    const tableItem = bot.inventory.items().find(item => item.name === "crafting_table");
+    if (!tableItem) {
+        // 理论上不会发生，因为背包已有 crafting_tablex1
+        bot.chat("背包没有工作台，合成一个。");
+        await craftItem(bot, "crafting_table", 1);
+    } else {
+        bot.chat(`背包中有工作台（${tableItem.count}个），准备放置。`);
+    }
+
+    // 4. 寻找合适地面放置工作台
+    const groundTypes = ["grass_block", "dirt", "stone", "coarse_dirt", "podzol"];
+    let ground = null;
+    for (const type of groundTypes) {
+        const blocks = bot.findNearbyBlocks(type, 32, 10);
+        if (blocks.length > 0) {
+            ground = blocks[0];
+            break;
+        }
+    }
+    if (!ground) {
+        throw new Error("找不到合适的地面放置工作台");
+    }
+    // 放置位置：地面上方一格
+    const placePos = { x: ground.x, y: ground.y + 1, z: ground.z };
+    // 检查 bot 当前位置，若水平距离太近则调整放置位置
+    const botPos = bot.entity.position;
+    const dx = Math.abs(botPos.x - placePos.x);
+    const dz = Math.abs(botPos.z - placePos.z);
+    if (dx < 2 && dz < 2) {
+        // 向随机方向偏移 3 格
+        const dir = Math.random() < 0.5 ? 1 : -1;
+        placePos.x += dir * 3;
+        placePos.z += dir * 3;
+        bot.chat(`调整工作台放置位置以避免重叠，新位置 ${placePos.x}, ${placePos.y}, ${placePos.z}`);
+    }
+    bot.chat(`将工作台放置在 ${placePos.x}, ${placePos.y}, ${placePos.z}`);
+    await placeItem(bot, "crafting_table", placePos);
+
+    // 5. 移动到工作台旁边（保持水平距离 2 格，同一高度）
+    // 计算目标点：从放置位置向 x 方向移动 2 格
+    const targetX = placePos.x + 2;
+    const targetZ = placePos.z;
+    const targetY = placePos.y;
+    await moveToPosition(bot, targetX, targetY, targetZ, 2);
+
+    // 6. 激活工作台
+    await activateNearestBlock(bot, "crafting_table");
+    bot.chat("工作台已打开，云杉木板已准备好排列成3x3图案（中心留空）。");
+}
+```

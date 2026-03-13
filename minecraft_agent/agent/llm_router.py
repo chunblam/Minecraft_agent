@@ -11,7 +11,10 @@ import time
 from openai import AsyncOpenAI
 from loguru import logger
 
+# 小模型（classify/意图识别）单独较短超时，避免硅基流动高峰期长时间卡住
+CLASSIFY_TIMEOUT = float(os.getenv("CLASSIFY_TIMEOUT", "25"))
 LLM_CALL_TIMEOUT = float(os.getenv("DEEPSEEK_LLM_TIMEOUT", "90"))
+STREAM_THINK_TIMEOUT = float(os.getenv("STREAM_THINK_TIMEOUT", "90"))
 
 
 class LLMRouter:
@@ -57,9 +60,12 @@ class LLMRouter:
         )
 
     async def classify(self, system_prompt: str, user_prompt: str, temperature: float = 0.3) -> str:
-        """意图、复杂度、可行性、Critic、RAG 分类、技能抽象 → 小模型（或回退大模型）"""
+        """意图、复杂度、可行性、Critic、RAG 分类、技能抽象 → 小模型（或回退大模型）。使用较短超时避免高峰期长时间卡住。"""
         client, model = self._client_for_classify()
-        return await self._call(client, model, system_prompt, user_prompt, temperature)
+        return await self._call(
+            client, model, system_prompt, user_prompt, temperature,
+            timeout=CLASSIFY_TIMEOUT,
+        )
 
     async def _call(
         self,
@@ -68,10 +74,12 @@ class LLMRouter:
         system_prompt: str,
         user_prompt: str,
         temperature: float,
+        timeout: float = None,
     ) -> str:
         """底层 API 调用，带超时与错误处理。消息顺序固定为 [system, user]，便于 DeepSeek 上下文硬盘缓存对 system 前缀命中。"""
+        timeout = timeout if timeout is not None else LLM_CALL_TIMEOUT
         t0 = time.monotonic()
-        logger.info(f"[LLM] 请求中（超时 {int(LLM_CALL_TIMEOUT)}s）: {model}")
+        logger.info(f"[LLM] 请求中（超时 {int(timeout)}s）: {model}")
         try:
             response = await asyncio.wait_for(
                 client.chat.completions.create(
@@ -83,7 +91,7 @@ class LLMRouter:
                     temperature=temperature,
                     stream=False,
                 ),
-                timeout=LLM_CALL_TIMEOUT,
+                timeout=timeout,
             )
             content = response.choices[0].message.content or ""
             elapsed = time.monotonic() - t0
@@ -98,7 +106,7 @@ class LLMRouter:
             return content
         except asyncio.TimeoutError:
             elapsed = time.monotonic() - t0
-            logger.warning(f"[LLM] 调用超时（{elapsed:.1f}s > {LLM_CALL_TIMEOUT}s），返回空结果，请检查网络或 API")
+            logger.warning(f"[LLM] 调用超时（{elapsed:.1f}s > {timeout}s），返回空结果，请检查网络或 API")
             return ""
         except Exception as e:
             logger.error(f"LLM 调用失败 (model={model}): {e}", exc_info=True)
@@ -111,33 +119,36 @@ class LLMRouter:
         temperature: float = 0.3,
         on_chunk=None,
     ) -> str:
-        """流式代码生成，on_chunk(delta) 可实时反馈（如发 MC 聊天）。"""
+        """流式代码生成，on_chunk(delta) 可实时反馈（如发 MC 聊天）。整段请求+流式读取受 STREAM_THINK_TIMEOUT 限制。"""
         full_text = ""
         t0 = time.monotonic()
-        logger.info(f"[LLM] stream 请求中: {self.code_model}")
-        try:
-            stream = await asyncio.wait_for(
-                self.code_client.chat.completions.create(
-                    model=self.code_model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    temperature=temperature,
-                    stream=True,
-                ),
-                timeout=LLM_CALL_TIMEOUT,
+
+        async def _do_stream():
+            nonlocal full_text
+            stream = await self.code_client.chat.completions.create(
+                model=self.code_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=temperature,
+                stream=True,
             )
             async for chunk in stream:
                 delta = (chunk.choices[0].delta.content or "") if chunk.choices else ""
                 full_text += delta
                 if on_chunk and delta:
                     await on_chunk(delta)
+
+        logger.info(f"[LLM] stream 请求中（总超时 {int(STREAM_THINK_TIMEOUT)}s）: {self.code_model}")
+        try:
+            await asyncio.wait_for(_do_stream(), timeout=STREAM_THINK_TIMEOUT)
             elapsed = time.monotonic() - t0
             logger.debug(f"[LLM] stream 完成 [{elapsed:.1f}s]")
             return full_text
         except asyncio.TimeoutError:
-            logger.warning("[LLM] stream 超时，返回已接收内容")
+            elapsed = time.monotonic() - t0
+            logger.warning(f"[LLM] stream 总超时（{elapsed:.1f}s），返回已接收内容（{len(full_text)} 字）")
             return full_text
         except Exception as e:
             logger.error(f"LLM stream 失败: {e}", exc_info=True)

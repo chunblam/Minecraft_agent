@@ -1,0 +1,6 @@
+[chat] 背包中有20个云杉木板，足够排列。
+[chat] 附近没有工作台，合成一个工作台。
+[chat] 已合成 1 个 crafting_table
+[chat] 调整工作台放置位置以避免重叠。
+[chat] 将工作台放置在 -341, 102, 293
+[ERROR] Event blockUpdate:(-341, 102, 293) did not fire within timeout of 5000ms

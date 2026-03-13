@@ -1,0 +1,62 @@
+async function craftSticksOnWorkbench(bot) {
+    // 1. 检查背包是否有工作台
+    let workbench = bot.inventory.items().find(item => item.name === 'crafting_table');
+    if (!workbench) {
+        bot.chat('背包中没有工作台，需要合成一个。');
+        // 检查是否有足够的橡木木板（需要4个）
+        let planks = bot.inventory.items().find(item => item.name === 'oak_planks');
+        if (!planks || planks.count < 4) {
+            bot.chat('橡木木板不足，需要合成更多木板。');
+            // 检查是否有橡木原木
+            let logs = bot.inventory.items().find(item => item.name === 'oak_log');
+            if (!logs || logs.count < 1) {
+                bot.chat('没有橡木原木，需要先收集一些。');
+                // 使用已注入的技能收集原木
+                await collectMoreLogs(bot, { logType: 'oak_log', targetCount: 1 });
+            }
+            // 合成木板（每个原木可以合成4个木板）
+            await craftItem(bot, 'oak_planks', 4);
+        }
+        // 合成工作台
+        await craftItem(bot, 'crafting_table', 1);
+        bot.chat('成功合成工作台。');
+    } else {
+        bot.chat('背包中已有工作台。');
+    }
+
+    // 2. 放置工作台
+    // 找一个合适的位置放置工作台（在当前位置附近找一个空地）
+    const pos = bot.entity.position;
+    // 在当前位置附近找一个固体方块上方的空气格
+    const nearbyBlocks = bot.findNearbyBlocks('grass_block', 32, 10);
+    let placePos;
+    if (nearbyBlocks.length > 0) {
+        // 使用第一个找到的草方块上方的位置
+        const block = nearbyBlocks[0];
+        placePos = { x: block.x, y: block.y + 1, z: block.z };
+    } else {
+        // 如果没有找到草方块，使用当前位置偏移2格
+        placePos = { x: Math.floor(pos.x) + 2, y: Math.floor(pos.y), z: Math.floor(pos.z) };
+    }
+    bot.chat(`放置工作台在位置 ${placePos.x}, ${placePos.y}, ${placePos.z}`);
+    await placeItem(bot, 'crafting_table', placePos);
+
+    // 3. 检查背包是否有足够的橡木木板来合成木棍（需要2个）
+    let currentPlanks = bot.inventory.items().find(item => item.name === 'oak_planks');
+    if (!currentPlanks || currentPlanks.count < 2) {
+        bot.chat('橡木木板不足，需要合成更多木板。');
+        // 检查是否有橡木原木
+        let logs = bot.inventory.items().find(item => item.name === 'oak_log');
+        if (!logs || logs.count < 1) {
+            bot.chat('没有橡木原木，需要先收集一些。');
+            await collectMoreLogs(bot, { logType: 'oak_log', targetCount: 1 });
+        }
+        // 合成足够的木板（至少2个）
+        await craftItem(bot, 'oak_planks', 2);
+    }
+
+    // 4. 合成木棍
+    bot.chat('开始合成木棍。');
+    await craftItem(bot, 'stick', 4); // 合成4个木棍（每次合成产出4个）
+    bot.chat('成功合成木棍！');
+}

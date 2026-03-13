@@ -1,0 +1,3 @@
+[chat] 背包中有足够的云杉木板。
+[chat] 发现附近有工作台，前往使用。
+[ERROR] Took to long to decide path to goal!

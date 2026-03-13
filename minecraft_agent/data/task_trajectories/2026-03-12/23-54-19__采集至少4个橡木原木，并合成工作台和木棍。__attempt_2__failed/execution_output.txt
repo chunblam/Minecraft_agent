@@ -1,0 +1,5 @@
+[chat] 开始采集橡木原木
+[chat] 已挖掘 4 个 oak_log
+[chat] 已采集橡木原木，当前数量: 0
+[chat] 已挖掘 1 个 oak_log
+[ERROR] 合成 oak_planks 需要工作台，但附近没有且背包中也没有

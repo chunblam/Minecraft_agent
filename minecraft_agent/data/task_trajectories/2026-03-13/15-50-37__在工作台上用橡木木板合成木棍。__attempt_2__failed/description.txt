@@ -1,0 +1,4 @@
+task: 在工作台上用橡木木板合成木棍。
+attempt: 2
+success: False
+critic_ok: False

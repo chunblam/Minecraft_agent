@@ -1,0 +1,42 @@
+Explain: 上次错误是因为 `equipItem(bot, "air", "hand")` 试图装备"air"，但背包中没有"air"物品。实际上，要空手只需要不装备任何工具即可，mineBlock 会自动使用空手挖掘。控制原语中的 equipItem 主要用于装备实际物品（如工具、武器），而不是装备"air"。
+
+Plan:
+1. 寻找附近的橡木原木，如果没有就探索
+2. 移动到原木附近
+3. 直接使用 mineBlock 破坏1个橡木原木（mineBlock 会自动使用空手）
+4. 捡起掉落物
+
+Code:
+```javascript
+async function breakOneOakLog(bot) {
+    // 1. 寻找附近的橡木原木
+    const logs = bot.findNearbyBlocks("oak_log", 32, 10);
+    if (logs.length === 0) {
+        bot.chat("附近没有找到橡木原木，开始探索寻找。");
+        // 随机选择一个方向探索
+        const directions = ["north", "south", "east", "west"];
+        const randomDir = directions[Math.floor(Math.random() * directions.length)];
+        await exploreUntil(bot, randomDir, 64, () => {
+            const foundLogs = bot.findNearbyBlocks("oak_log", 32, 10);
+            return foundLogs.length > 0;
+        });
+    }
+    // 重新获取原木位置
+    const logsAfter = bot.findNearbyBlocks("oak_log", 32, 10);
+    if (logsAfter.length === 0) {
+        throw new Error("探索后仍未找到橡木原木");
+    }
+    const targetLog = logsAfter[0];
+    bot.chat(`找到橡木原木在 ${targetLog.x}, ${targetLog.y}, ${targetLog.z}`);
+
+    // 2. 移动到原木附近（距离2格以内）
+    await moveToPosition(bot, targetLog.x, targetLog.y, targetLog.z, 2);
+
+    // 3. 破坏1个橡木原木（mineBlock会自动使用空手）
+    await mineBlock(bot, "oak_log", 1);
+
+    // 4. 捡起掉落的物品
+    await pickupNearbyItems(bot);
+    bot.chat("成功破坏1个橡木原木并捡起掉落物。");
+}
+```

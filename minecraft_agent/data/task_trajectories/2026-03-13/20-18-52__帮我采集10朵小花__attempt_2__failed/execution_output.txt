@@ -1,0 +1,4 @@
+[chat] 当前有 0 朵小花，需要采集 10 朵
+[chat] 找到小花在 -350, 116, 303
+[chat] 已到达 (-350,116,303) 附近
+[ERROR] Cannot read properties of undefined (reading 'replace')

@@ -18,7 +18,7 @@ ReAct 对应关系：
   比 JSON 单步 ReAct 少 60-80% LLM 调用，执行连贯无 Python 往返
 """
 
-import asyncio, copy, json, re, os
+import asyncio, copy, json, re, os, time
 from pathlib import Path
 from loguru import logger
 from .llm_router import LLMRouter
@@ -56,12 +56,44 @@ class VoyagerAgent:
         self.critic      = CriticAgent(llm)
         self.planner     = TaskPlanner(llm)
         self.on_code_gen_progress = None  # 可选：流式代码生成时首 chunk 回调（如发 MC 聊天「正在生成代码…」）
+        self._last_game_state_refresh_ts = 0.0  # 用于「用前刷新」节流
+
+    async def _refresh_game_state(self, game_state: dict, min_interval_sec: float = 1.0) -> None:
+        """在需要用到 game_state 前拉取最新观测（背包、附近方块等），带节流避免频繁请求。"""
+        now = time.monotonic()
+        if now - self._last_game_state_refresh_ts < min_interval_sec:
+            return
+        try:
+            env = get_env()
+            obs = await env.observe()
+            if obs:
+                game_state.update(obs)
+                self._last_game_state_refresh_ts = now
+                logger.debug("[State] 已刷新 game_state（nearby_blocks / inventory 等）")
+        except Exception as e:
+            logger.debug(f"[State] 刷新 game_state 失败: {e}")
+
+    async def _add_world_state_memory(self, game_state: dict) -> None:
+        """任务成功后将「附近已有设施」等世界状态写入记忆，便于后续任务复用（如已有箱子则直接打开）。"""
+        nb = game_state.get("nearby_blocks") or {}
+        parts = []
+        if nb.get("chest", 0) > 0:
+            parts.append("附近已放置了至少一个箱子(chest)，可用于存放或取出物品")
+        if nb.get("crafting_table", 0) > 0:
+            parts.append("附近已有工作台(crafting_table)，可直接使用合成")
+        if nb.get("furnace", 0) > 0:
+            parts.append("附近已有熔炉(furnace)，可直接使用冶炼")
+        if not parts:
+            return
+        content = "【世界状态】" + "；".join(parts) + "。"
+        await self.memory.add_event("system", content, {"type": "world_state", "nearby_blocks": dict(nb)})
 
     # ── 公共入口 ──────────────────────────────────────────────────────────────
 
     async def run(self, game_state: dict, player_message: str) -> dict:
         await self.memory.add_event("user", player_message,
                                     {"player": game_state.get("player_name", "Player")})
+        await self._refresh_game_state(game_state)
         cls = await self._classify(player_message, game_state)
         intent = cls.get("intent", "task_execution")
         if intent != "task_execution":
@@ -76,9 +108,16 @@ class VoyagerAgent:
         complexity = cls.get("complexity", "simple")
         path = "hierarchical" if complexity == "complex" else "task"
         logger.log("FLOW", f"Agent.run → intent=task_execution complexity={complexity!r} path={path!r}")
+        await self.memory.add_event("system", f"开始任务: {player_message[:80]}",
+                                    {"type": "task_start", "task": player_message})
         result = (await self._run_hierarchical(game_state, player_message)
                   if complexity == "complex"
                   else await self._run_task(player_message, game_state))
+        await self.memory.add_event("system",
+                                    f"任务结束: {result.get('display_message', '')[:80]}",
+                                    {"type": "task_end", "success": result.get("extra_data", {}).get("success", False)})
+        if result.get("extra_data", {}).get("success"):
+            await self._add_world_state_memory(game_state)
         await self.memory.add_event("agent", result.get("display_message", ""), {})
         return result
 
@@ -140,12 +179,20 @@ class VoyagerAgent:
         completed_str = "\n".join(f"- {t}" for t in completed_tasks) if completed_tasks else "（暂无）"
         failed_str = "\n".join(f"- {t}" for t in failed_tasks) if failed_tasks else "（暂无）"
 
+        # 初级阶段：已完成任务少或技能少时，强制单任务（simple）；中后期再允许复杂/多子任务
+        num_skills = len(skills or [])
+        if len(completed_tasks) < 8 or num_skills < 5:
+            complexity_hint = "当前为初级阶段，请只生成一个简单任务（一句话只做一件事），例如：挖4个木头、用原木合成木板、合成工作台、捡起附近掉落物、用圆石合成石镐。不要生成需要多步或多子任务才能完成的任务。"
+        else:
+            complexity_hint = "当前技能与进度已较多，可结合状态生成简单或稍复杂的任务；仍建议以单任务为主，必要时可生成多步骤任务。"
+
         # 进度 0 且无有效 guide 时可硬编码首任务
         if len(completed_tasks) == 0 and guide_context == "（暂无）":
             return "挖 1 个木头"
 
         user = AUTONOMOUS_TASK_GENERATOR_HUMAN_TEMPLATE.format(
             guide_context=guide_context,
+            complexity_hint=complexity_hint,
             game_state=json.dumps(trimmed, ensure_ascii=False),
             learned_skills=learned_skills,
             recent_memory=recent,
@@ -207,7 +254,8 @@ class VoyagerAgent:
         self._save_autonomous_curriculum(completed, failed)
 
     async def run_autonomous(self, game_state: dict) -> dict:
-        """空闲时由智能任务生成器产生下一任务并执行"""
+        """空闲时由智能任务生成器产生下一任务并执行；会等待本任务技能入库后再返回，保证下一任务能用到新技能。"""
+        await self._refresh_game_state(game_state)
         task = await self._get_next_autonomous_task(game_state)
         if not task:
             return {"action_type": "chat", "display_message": "", "extra_data": {}}
@@ -218,6 +266,14 @@ class VoyagerAgent:
         except Exception as e:
             logger.debug(f"[Autonomous] 发送任务到聊天失败: {e}")
         result = await self._run_task(task, game_state)
+        pending = result.pop("pending_skill_task", None)
+        if pending is not None:
+            try:
+                await asyncio.wait_for(pending, timeout=30)
+            except asyncio.TimeoutError:
+                logger.debug("[Autonomous] 技能存储超时，继续")
+            except Exception as e:
+                logger.debug(f"[Autonomous] 等待技能存储: {e}")
         return {"action_type": "chat", "display_message": f"[自主] {task}",
                 "extra_data": {"mode": "autonomous", **result.get("extra_data", {})}}
 
@@ -225,6 +281,7 @@ class VoyagerAgent:
 
     async def _run_task(self, task: str, game_state: dict,
                         critique: str = "", context: str | dict = "") -> dict:
+        await self._refresh_game_state(game_state)
         # 技能库快速匹配：同质不同参时优先用已有技能代码并尝试参数替换执行
         fast_result = await self._try_skill_fast_path(task, game_state)
         if fast_result is not None:
@@ -264,6 +321,7 @@ class VoyagerAgent:
                             await self.on_code_gen_progress("正在生成代码…")
                         except Exception as e:
                             logger.debug(f"on_code_gen_progress: {e}")
+                logger.debug("[CodeLoop] 即将请求 stream_think（代码生成）")
                 raw = await self.llm.stream_think(
                     system_prompt=CODE_GENERATION_SYSTEM_PROMPT,
                     user_prompt=prompt, temperature=0.3, on_chunk=_on_chunk)
@@ -362,7 +420,8 @@ class VoyagerAgent:
 
             if ok:
                 logger.success("[Flow] 任务通过 Critic，后台存储技能")
-                asyncio.create_task(self._store_skill(task, best_code, last_output))
+                await self._add_world_state_memory(game_state)
+                storage_task = asyncio.create_task(self._store_skill(task, best_code, last_output))
                 logger.info("[Task] 当前任务执行结束（成功）。")
                 self._update_autonomous_curriculum(task, True)
                 return {
@@ -370,6 +429,7 @@ class VoyagerAgent:
                     "display_message": f"✅ {task[:40]} 完成（{attempt} 次尝试）",
                     "extra_data": {"success": True, "attempts": attempt,
                                    "code": best_code, "output": last_output},
+                    "pending_skill_task": storage_task,
                 }
             critique  = new_crit
             last_code = code
@@ -385,6 +445,7 @@ class VoyagerAgent:
     # ── 层级任务（复杂指令分解执行）─────────────────────────────────────────
 
     async def _run_hierarchical(self, game_state: dict, task: str) -> dict:
+        await self._refresh_game_state(game_state)
         logger.log("FLOW", "Planner.decompose(task=...) + _build_context")
         subtasks, _ = await asyncio.gather(
             self.planner.decompose(task, game_state, retriever=self.retriever),
@@ -420,21 +481,43 @@ class VoyagerAgent:
         """
         返回 {"context": str, "skill_codes": list[str]}。
         context 用于 prompt；skill_codes 用于执行时注入 Node，供按名调用技能。
+        skill / RAG / memory 三路并发，每路返回时打日志便于排查卡顿。
         """
         logger.log("FLOW", "_build_context → skill+RAG+memory 三路并发")
-        skill_str, skill_codes = "", []
-        try:
-            skill_str, skill_codes = await self.skill_lib.get_programs_context_and_codes(task, top_k=3)
-        except Exception as e:
-            logger.debug(f"技能检索失败: {e}")
-        r, m = await asyncio.gather(
-            self._fetch_rag_context(task),
-            self.memory.get_relevant_context(task),
-            return_exceptions=True)
+
+        async def _skill_ctx():
+            t0 = __import__("time").monotonic()
+            try:
+                out = await self.skill_lib.get_programs_context_and_codes(task, top_k=3)
+                logger.debug(f"[Context] skill 完成 [{__import__('time').monotonic() - t0:.1f}s]")
+                return out
+            except Exception as e:
+                logger.debug(f"[Context] skill 失败: {e}")
+                return ("", [])
+
+        async def _rag_ctx():
+            t0 = __import__("time").monotonic()
+            out = await self._fetch_rag_context(task)
+            logger.debug(f"[Context] RAG 完成 [{__import__('time').monotonic() - t0:.1f}s]")
+            return out
+
+        async def _memory_ctx():
+            t0 = __import__("time").monotonic()
+            out = await self.memory.get_relevant_context(task)
+            logger.debug(f"[Context] memory 完成 [{__import__('time').monotonic() - t0:.1f}s]")
+            return out
+
+        skill_result, r, m = await asyncio.gather(
+            _skill_ctx(),
+            _rag_ctx(),
+            _memory_ctx(),
+            return_exceptions=True,
+        )
+        skill_str, skill_codes = ("", []) if isinstance(skill_result, BaseException) else skill_result
+        rag_context = (r if isinstance(r, str) else "") or ""
         parts = []
         if isinstance(skill_str, str) and skill_str.strip():
             parts.append(skill_str)
-        rag_context = (r if isinstance(r, str) else "") or ""
         if rag_context.strip():
             parts.append(rag_context)
         if isinstance(m, str) and m.strip():
@@ -493,7 +576,7 @@ class VoyagerAgent:
             last_code=last_code, execution_error=execution_error,
             chat_log=(chat_log or "N/A")[:300],
             biome=game_state.get("biome", "unknown"), time_of_day=tod_str,
-            nearby_blocks=", ".join(f"{k}:{v}" for k, v in list(nb.items())[:15]) or "none",
+            nearby_blocks=", ".join(f"{k}:{v}" for k, v in list(nb.items())[:28]) or "none",
             nearby_entities=", ".join(
                 f"{e.get('name','?')}({e.get('distance','?')}m)" for e in ne[:8]) or "none",
             health=game_state.get("health", 20), food=game_state.get("food", 20),

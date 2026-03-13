@@ -1,0 +1,4 @@
+[chat] 已空手
+[chat] 手持空手准备合成。
+[chat] 开始将 3 个云杉原木合成为云杉木板。
+[ERROR] Error: missing ingredient

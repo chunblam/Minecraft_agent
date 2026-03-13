@@ -1,0 +1,4 @@
+[chat] 开始放置箱子...
+[chat] 背包中没有箱子，需要合成。
+[chat] 木板不足8个，当前有 4 个，需要收集或合成。
+[ERROR] collectWoodLogs is not defined

@@ -1,0 +1,55 @@
+async function collectLogsAndCraftTableSticks(bot) {
+    // 1. 采集至少4个橡木原木
+    bot.chat("开始采集橡木原木");
+    const neededLogs = 4;
+    const currentLogs = bot.inventory.items().find(item => item.name === "oak_log")?.count || 0;
+    if (currentLogs < neededLogs) {
+        await mineBlock(bot, "oak_log", neededLogs - currentLogs);
+        await pickupNearbyItems(bot);
+    }
+    bot.chat(`已采集橡木原木，当前数量: ${bot.inventory.items().find(item => item.name === "oak_log")?.count || 0}`);
+
+    // 2. 合成橡木木板（每个原木得4个木板）
+    const logs = bot.inventory.items().find(item => item.name === "oak_log");
+    if (logs && logs.count >= 1) {
+        // 先合成一组木板（4个）
+        await craftItem(bot, "oak_planks", 4);
+        bot.chat("已合成橡木木板");
+    }
+
+    // 3. 合成工作台（需要4个木板）
+    const planks = bot.inventory.items().find(item => item.name === "oak_planks")?.count || 0;
+    if (planks < 4) {
+        // 如果木板不够，再合成一些
+        const logsNeeded = Math.ceil((4 - planks) / 4);
+        if (logsNeeded > 0) {
+            await mineBlock(bot, "oak_log", logsNeeded);
+            await pickupNearbyItems(bot);
+            await craftItem(bot, "oak_planks", logsNeeded * 4);
+        }
+    }
+    await craftItem(bot, "crafting_table", 1);
+    bot.chat("已合成工作台");
+
+    // 4. 合成木棍（需要2个木板）
+    // 确保有足够木板
+    const planksAfter = bot.inventory.items().find(item => item.name === "oak_planks")?.count || 0;
+    if (planksAfter < 2) {
+        // 如果木板不够，再合成一些
+        const logsNeeded = Math.ceil((2 - planksAfter) / 4);
+        if (logsNeeded > 0) {
+            await mineBlock(bot, "oak_log", logsNeeded);
+            await pickupNearbyItems(bot);
+            await craftItem(bot, "oak_planks", logsNeeded * 4);
+        }
+    }
+    await craftItem(bot, "stick", 4); // 2个木板合成4个木棍
+    bot.chat("已合成木棍");
+
+    // 5. 报告完成
+    const finalLogs = bot.inventory.items().find(item => item.name === "oak_log")?.count || 0;
+    const finalPlanks = bot.inventory.items().find(item => item.name === "oak_planks")?.count || 0;
+    const finalSticks = bot.inventory.items().find(item => item.name === "stick")?.count || 0;
+    const finalTable = bot.inventory.items().find(item => item.name === "crafting_table")?.count || 0;
+    bot.chat(`任务完成！原木: ${finalLogs}, 木板: ${finalPlanks}, 木棍: ${finalSticks}, 工作台: ${finalTable}`);
+}

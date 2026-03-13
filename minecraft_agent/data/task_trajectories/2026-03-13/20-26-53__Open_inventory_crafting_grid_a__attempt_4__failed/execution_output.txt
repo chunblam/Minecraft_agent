@@ -1,0 +1,14 @@
+[chat] 背包中没有云杉原木，需要先收集一些。
+[chat] 当前有 0 个 spruce_log，需要再收集 1 个
+[chat] 开始第 1 次尝试收集 spruce_log 原木
+[chat] 找到 spruce_log 原木在 -333, 112, 289
+[chat] 已到达 (-333,112,289) 附近
+[chat] 已挖掘 1 个 spruce_log
+[chat] 成功破坏1个 spruce_log 原木并捡起掉落物。
+[chat] 收集后现在有 1 个 spruce_log 原木
+[chat] 已收集足够 spruce_log 原木，当前 1 个
+[chat] 任务完成！总共收集了 1 个 spruce_log 原木
+[chat] 背包中有 1 个云杉原木。
+[chat] 已空手
+[chat] 开始在玩家合成网格中将 1 个云杉原木合成为 4 个云杉木板。
+[ERROR] Error: missing ingredient

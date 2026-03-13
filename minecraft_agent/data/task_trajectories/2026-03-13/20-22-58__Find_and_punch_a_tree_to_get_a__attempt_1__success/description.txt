@@ -1,0 +1,4 @@
+task: Find and punch a tree to get at least 2 wood logs
+attempt: 1
+success: True
+critic_ok: True

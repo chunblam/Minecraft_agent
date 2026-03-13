@@ -1,0 +1,4 @@
+task: 用手破坏1个橡木原木
+attempt: 2
+success: True
+critic_ok: True

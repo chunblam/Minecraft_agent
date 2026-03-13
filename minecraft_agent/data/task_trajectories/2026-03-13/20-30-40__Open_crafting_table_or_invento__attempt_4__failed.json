@@ -1,0 +1,511 @@
+{
+  "run_id": "2026-03-13_20-30-40",
+  "task": "Open crafting table or inventory grid and arrange planks in 3x3 pattern leaving center empty",
+  "attempt": 4,
+  "code": "async function arrangePlanksInCraftingGrid(bot) {\n    // 1. 检查背包木板\n    const planks = bot.inventory.items().find(item => item.name === \"spruce_planks\");\n    if (!planks || planks.count < 4) {\n        throw new Error(\"需要至少4个云杉木板来排列3x3图案\");\n    }\n    bot.chat(\"背包中有20个云杉木板，足够排列。\");\n\n    // 2. 寻找附近的工作台（重新扫描，避免缓存）\n    const nearby = bot.scanNearby(24);\n    if (nearby[\"crafting_table\"] && nearby[\"crafting_table\"] > 0) {\n        // 使用 findNearbyBlocks 获取具体坐标\n        const craftingTables = bot.findNearbyBlocks(\"crafting_table\", 32, 5);\n        if (craftingTables.length > 0) {\n            const tablePos = craftingTables[0];\n            bot.chat(`发现工作台在 ${tablePos.x}, ${tablePos.y}, ${tablePos.z}，前往使用。`);\n            await moveToPosition(bot, tablePos.x, tablePos.y, tablePos.z, 2);\n            await activateNearestBlock(bot, \"crafting_table\");\n            bot.chat(\"工作台已打开，可以排列云杉木板成3x3图案（中心留空）。\");\n            return;\n        }\n    }\n\n    // 3. 合成工作台\n    bot.chat(\"附近没有工作台，合成一个工作台。\");\n    await craftItem(bot, \"crafting_table\", 1);\n\n    // 4. 放置工作台\n    // 寻找安全地面：优先 grass_block, dirt, stone, coarse_dirt\n    const groundTypes = [\"grass_block\", \"dirt\", \"stone\", \"coarse_dirt\", \"podzol\"];\n    let ground = null;\n    for (const type of groundTypes) {\n        const blocks = bot.findNearbyBlocks(type, 5, 10);\n        if (blocks.length > 0) {\n            ground = blocks[0];\n            break;\n        }\n    }\n    if (!ground) {\n        // 如果找不到上述地面，尝试更远距离搜索\n        for (const type of groundTypes) {\n            const blocks = bot.findNearbyBlocks(type, 32, 10);\n            if (blocks.length > 0) {\n                ground = blocks[0];\n                break;\n            }\n        }\n    }\n    if (!ground) {\n        throw new Error(\"找不到合适的地面放置工作台\");\n    }\n    // 放置位置：地面上方一格，确保是空气且不与 bot 重叠\n    const placePos = { x: ground.x, y: ground.y + 1, z: ground.z };\n    // 检查 bot 当前位置，若太近则调整放置位置（例如向 x 或 z 偏移 2 格）\n    const botPos = bot.entity.position;\n    if (Math.abs(botPos.x - placePos.x) < 2 && Math.abs(botPos.z - placePos.z) < 2) {\n        placePos.x += 2;\n        placePos.z += 2;\n        bot.chat(\"调整工作台放置位置以避免重叠。\");\n    }\n    bot.chat(`将工作台放置在 ${placePos.x}, ${placePos.y}, ${placePos.z}`);\n    await placeItem(bot, \"crafting_table\", placePos);\n\n    // 5. 移动到工作台旁边（保持 2 格距离）\n    await moveToPosition(bot, placePos.x, placePos.y, placePos.z, 2);\n\n    // 6. 激活工作台\n    await activateNearestBlock(bot, \"crafting_table\");\n\n    // 7. 报告完成\n    bot.chat(\"工作台已打开，云杉木板已准备好排列成3x3图案（中心留空）。\");\n}",
+  "execution_success": false,
+  "execution_error": "Event blockUpdate:(-341, 102, 293) did not fire within timeout of 5000ms",
+  "critic_ok": false,
+  "critic_message": "",
+  "output": "[chat] 背包中有20个云杉木板，足够排列。\n[chat] 附近没有工作台，合成一个工作台。\n[chat] 已合成 1 个 crafting_table\n[chat] 调整工作台放置位置以避免重叠。\n[chat] 将工作台放置在 -341, 102, 293\n[ERROR] Event blockUpdate:(-341, 102, 293) did not fire within timeout of 5000ms",
+  "game_state_before": {
+    "position": {
+      "x": -341.4,
+      "y": 102,
+      "z": 291.5
+    },
+    "inventory": [
+      {
+        "item": "azure_bluet",
+        "count": 5,
+        "slot": 36
+      },
+      {
+        "item": "dandelion",
+        "count": 5,
+        "slot": 37
+      },
+      {
+        "item": "spruce_sapling",
+        "count": 2,
+        "slot": 38
+      },
+      {
+        "item": "spruce_planks",
+        "count": 20,
+        "slot": 39
+      },
+      {
+        "item": "dirt",
+        "count": 8,
+        "slot": 40
+      },
+      {
+        "item": "coarse_dirt",
+        "count": 3,
+        "slot": 41
+      },
+      {
+        "item": "spruce_log",
+        "count": 1,
+        "slot": 42
+      },
+      {
+        "item": "gravel",
+        "count": 6,
+        "slot": 43
+      }
+    ],
+    "equipment": {
+      "mainhand": "azure_bluet",
+      "armor": {
+        "head": null,
+        "chest": null,
+        "legs": null,
+        "feet": null
+      }
+    },
+    "health": 20,
+    "food": 20,
+    "xp_level": 0,
+    "time": 6172,
+    "biome": "37",
+    "nearby_blocks": {
+      "copper_ore": 8,
+      "stone": 4306,
+      "dirt": 640,
+      "granite": 80,
+      "coal_ore": 68,
+      "diorite": 40,
+      "iron_ore": 17,
+      "gravel": 173,
+      "bricks": 43,
+      "brown_terracotta": 4,
+      "packed_mud": 9,
+      "mud_bricks": 37,
+      "brick_wall": 6,
+      "suspicious_gravel": 9,
+      "coarse_dirt": 28,
+      "blue_terracotta": 5,
+      "red_terracotta": 4,
+      "brick_stairs": 5,
+      "mud_brick_stairs": 3,
+      "mud_brick_wall": 1,
+      "orange_glazed_terracotta": 2,
+      "blast_furnace": 1,
+      "brick_slab": 1,
+      "cobblestone": 48,
+      "cyan_terracotta": 2,
+      "white_terracotta": 12,
+      "light_gray_glazed_terracotta": 3,
+      "stone_bricks": 1,
+      "cracked_stone_bricks": 1,
+      "mud_brick_slab": 4,
+      "grass_block": 4,
+      "podzol": 38
+    },
+    "nearby_entities": [
+      {
+        "name": "player",
+        "type": "player",
+        "distance": 2.8,
+        "position": {
+          "x": -342,
+          "y": 105,
+          "z": 291
+        }
+      },
+      {
+        "name": "item",
+        "type": "other",
+        "distance": 13.3,
+        "position": {
+          "x": -343,
+          "y": 115,
+          "z": 294
+        }
+      },
+      {
+        "name": "item",
+        "type": "other",
+        "distance": 18,
+        "position": {
+          "x": -341,
+          "y": 120,
+          "z": 291
+        }
+      },
+      {
+        "name": "rabbit",
+        "type": "animal",
+        "distance": 25.2,
+        "position": {
+          "x": -355,
+          "y": 116,
+          "z": 308
+        }
+      },
+      {
+        "name": "rabbit",
+        "type": "animal",
+        "distance": 29,
+        "position": {
+          "x": -364,
+          "y": 116,
+          "z": 302
+        }
+      },
+      {
+        "name": "rabbit",
+        "type": "animal",
+        "distance": 33.5,
+        "position": {
+          "x": -357,
+          "y": 117,
+          "z": 317
+        }
+      },
+      {
+        "name": "rabbit",
+        "type": "animal",
+        "distance": 36.7,
+        "position": {
+          "x": -314,
+          "y": 111,
+          "z": 314
+        }
+      },
+      {
+        "name": "rabbit",
+        "type": "animal",
+        "distance": 37.9,
+        "position": {
+          "x": -369,
+          "y": 117,
+          "z": 312
+        }
+      },
+      {
+        "name": "rabbit",
+        "type": "animal",
+        "distance": 39.5,
+        "position": {
+          "x": -332,
+          "y": 112,
+          "z": 329
+        }
+      },
+      {
+        "name": "rabbit",
+        "type": "animal",
+        "distance": 40.7,
+        "position": {
+          "x": -377,
+          "y": 116,
+          "z": 304
+        }
+      }
+    ],
+    "chat_log": [
+      {
+        "username": "Agent",
+        "message": "正在生成代码…",
+        "time": 1773404883016
+      },
+      {
+        "username": "Agent",
+        "message": "发现附近有工作台，前往使用。",
+        "time": 1773404925764
+      },
+      {
+        "username": "Agent",
+        "message": "已到达 (-342,101,290) 附近",
+        "time": 1773404926684
+      },
+      {
+        "username": "lammm",
+        "message": "Teleported Agent to lammm]",
+        "time": 1773404956978
+      },
+      {
+        "username": "Agent",
+        "message": "背包中有足够的云杉木板。",
+        "time": 1773404974054
+      },
+      {
+        "username": "Agent",
+        "message": "发现附近有工作台，前往使用。",
+        "time": 1773404974095
+      }
+    ],
+    "dimension": "overworld",
+    "player_name": "lammm"
+  },
+  "game_state_after": {
+    "position": {
+      "x": -341.4,
+      "y": 102,
+      "z": 291.5
+    },
+    "inventory": [
+      {
+        "item": "azure_bluet",
+        "count": 5,
+        "slot": 36
+      },
+      {
+        "item": "dandelion",
+        "count": 5,
+        "slot": 37
+      },
+      {
+        "item": "spruce_sapling",
+        "count": 2,
+        "slot": 38
+      },
+      {
+        "item": "crafting_table",
+        "count": 1,
+        "slot": 39
+      },
+      {
+        "item": "dirt",
+        "count": 8,
+        "slot": 40
+      },
+      {
+        "item": "coarse_dirt",
+        "count": 3,
+        "slot": 41
+      },
+      {
+        "item": "spruce_log",
+        "count": 3,
+        "slot": 42
+      },
+      {
+        "item": "gravel",
+        "count": 6,
+        "slot": 43
+      }
+    ],
+    "equipment": {
+      "mainhand": "crafting_table",
+      "armor": {
+        "head": null,
+        "chest": null,
+        "legs": null,
+        "feet": null
+      }
+    },
+    "health": 20,
+    "food": 20,
+    "xp_level": 0,
+    "time": 6172,
+    "biome": "37",
+    "nearby_blocks": {
+      "copper_ore": 8,
+      "stone": 4306,
+      "dirt": 640,
+      "granite": 80,
+      "coal_ore": 68,
+      "diorite": 40,
+      "iron_ore": 17,
+      "gravel": 173,
+      "bricks": 43,
+      "brown_terracotta": 4,
+      "packed_mud": 9,
+      "mud_bricks": 37,
+      "brick_wall": 6,
+      "suspicious_gravel": 9,
+      "coarse_dirt": 28,
+      "blue_terracotta": 5,
+      "red_terracotta": 4,
+      "brick_stairs": 5,
+      "mud_brick_stairs": 3,
+      "mud_brick_wall": 1,
+      "orange_glazed_terracotta": 2,
+      "blast_furnace": 1,
+      "brick_slab": 1,
+      "cobblestone": 48,
+      "cyan_terracotta": 2,
+      "white_terracotta": 12,
+      "light_gray_glazed_terracotta": 3,
+      "stone_bricks": 1,
+      "cracked_stone_bricks": 1,
+      "mud_brick_slab": 4,
+      "grass_block": 4,
+      "podzol": 38
+    },
+    "nearby_entities": [
+      {
+        "name": "player",
+        "type": "player",
+        "distance": 4,
+        "position": {
+          "x": -342,
+          "y": 106,
+          "z": 291
+        }
+      },
+      {
+        "name": "item",
+        "type": "other",
+        "distance": 13.3,
+        "position": {
+          "x": -343,
+          "y": 115,
+          "z": 294
+        }
+      },
+      {
+        "name": "rabbit",
+        "type": "animal",
+        "distance": 25.2,
+        "position": {
+          "x": -355,
+          "y": 116,
+          "z": 308
+        }
+      },
+      {
+        "name": "rabbit",
+        "type": "animal",
+        "distance": 29,
+        "position": {
+          "x": -364,
+          "y": 116,
+          "z": 302
+        }
+      },
+      {
+        "name": "rabbit",
+        "type": "animal",
+        "distance": 33.6,
+        "position": {
+          "x": -357,
+          "y": 117,
+          "z": 317
+        }
+      },
+      {
+        "name": "rabbit",
+        "type": "animal",
+        "distance": 36.7,
+        "position": {
+          "x": -314,
+          "y": 111,
+          "z": 314
+        }
+      },
+      {
+        "name": "rabbit",
+        "type": "animal",
+        "distance": 37.9,
+        "position": {
+          "x": -369,
+          "y": 117,
+          "z": 312
+        }
+      },
+      {
+        "name": "rabbit",
+        "type": "animal",
+        "distance": 39.6,
+        "position": {
+          "x": -332,
+          "y": 112,
+          "z": 329
+        }
+      },
+      {
+        "name": "rabbit",
+        "type": "animal",
+        "distance": 40.7,
+        "position": {
+          "x": -377,
+          "y": 116,
+          "z": 304
+        }
+      },
+      {
+        "name": "rabbit",
+        "type": "animal",
+        "distance": 45.7,
+        "position": {
+          "x": -384,
+          "y": 116,
+          "z": 301
+        }
+      }
+    ],
+    "chat_log": [
+      {
+        "username": "Agent",
+        "message": "正在生成代码…",
+        "time": 1773404883016
+      },
+      {
+        "username": "Agent",
+        "message": "发现附近有工作台，前往使用。",
+        "time": 1773404925764
+      },
+      {
+        "username": "Agent",
+        "message": "已到达 (-342,101,290) 附近",
+        "time": 1773404926684
+      },
+      {
+        "username": "lammm",
+        "message": "Teleported Agent to lammm]",
+        "time": 1773404956978
+      },
+      {
+        "username": "Agent",
+        "message": "背包中有足够的云杉木板。",
+        "time": 1773404974054
+      },
+      {
+        "username": "Agent",
+        "message": "发现附近有工作台，前往使用。",
+        "time": 1773404974095
+      },
+      {
+        "username": "Agent",
+        "message": "背包中有20个云杉木板，足够排列。",
+        "time": 1773405035230
+      },
+      {
+        "username": "Agent",
+        "message": "附近没有工作台，合成一个工作台。",
+        "time": 1773405035230
+      },
+      {
+        "username": "Agent",
+        "message": "已合成 1 个 crafting_table",
+        "time": 1773405035281
+      },
+      {
+        "username": "Agent",
+        "message": "调整工作台放置位置以避免重叠。",
+        "time": 1773405035282
+      },
+      {
+        "username": "Agent",
+        "message": "将工作台放置在 -341, 102, 293",
+        "time": 1773405035282
+      }
+    ],
+    "dimension": "overworld",
+    "player_name": "lammm"
+  },
+  "timestamp": "2026-03-13T20:30:40.818867",
+  "skill_codes_injected": [
+    "craftWorkbench",
+    "breakOneLog",
+    "collectMoreLogs"
+  ],
+  "llm_prompt_user": "Code from the last round: async function arrangePlanksInCraftingGrid(bot) {\n    // 1. 检查背包木板\n    const planks = bot.inventory.items().find(item => item.name === \"spruce_planks\");\n    if (!planks || planks.count < 4) {\n        throw new Error(\"需要至少4个云杉木板来合成工作台\");\n    }\n    bot.chat(\"背包中有足够的云杉木板。\");\n\n    // 2. 寻找附近的工作台\n    const craftingTables = bot.findNearbyBlocks(\"crafting_table\", 32, 10);\n    if (craftingTables.length > 0) {\n        bot.chat(\"发现附近有工作台，前往使用。\");\n        const tablePos = craftingTables[0];\n        await moveToPosition(bot, tablePos.x, tablePos.y, tablePos.z, 2);\n        await activateNearestBlock(bot, \"crafting_table\");\n        bot.chat(\"工作台已打开，可以排列云杉木板成3x3图案（中心留空）。\");\n        return;\n    }\n\n    // 3. 合成工作台\n    bot.chat(\"附近没有工作台，合成一个工作台。\");\n    await craftItem(bot, \"crafting_table\", 1);\n\n    // 4. 放置工作台\n    // 寻找一个安全的放置位置：附近的地面方块上方\n    const groundBlocks = bot.findNearbyBlocks(\"dirt\", 5, 10); // 用 dirt 作为地面\n    if (groundBlocks.length === 0) {\n        // 如果没有 dirt，用 stone\n        groundBlocks.push(...bot.findNearbyBlocks(\"stone\", 5, 10));\n    }\n    if (groundBlocks.length === 0) {\n        throw new Error(\"找不到合适的地面放置工作台\");\n    }\n    const ground = groundBlocks[0];\n    const placePos = { x: ground.x, y: ground.y + 1, z: ground.z }; // 地面上方一格\n    bot.chat(`在工作台放置位置 ${placePos.x}, ${placePos.y}, ${placePos.z}`);\n    await placeItem(bot, \"crafting_table\", placePos);\n\n    // 5. 移动到工作台旁边\n    await moveToPosition(bot, placePos.x, placePos.y, placePos.z, 2);\n\n    // 6. 激活工作台\n    await activateNearestBlock(bot, \"crafting_table\");\n\n    // 7. 报告完成\n    bot.chat(\"工作台已打开，云杉木板已准备好排列成3x3图案（中心留空）。\");\n}\nExecution error: Took to long to decide path to goal!\nChat log: [chat] 背包中有足够的云杉木板。\n[chat] 发现附近有工作台，前往使用。\n[ERROR] Took to long to decide path to goal!\nBiome: 37\nTime: day\nNearby blocks (约24格内地图方块类型与数量；若已有 crafting_table、furnace 等可直接寻路使用，无需再从背包放置): stone:2600, iron_ore:14, granite:62, dirt:1330, diorite:36, gravel:158, coal_ore:32, grass_block:116, short_grass:42, bricks:39, mud_bricks:41, red_terracotta:8, copper_ore:4, blue_terracotta:4, coarse_dirt:73, suspicious_gravel:16, packed_mud:9, brick_stairs:1, podzol:92, mud_brick_stairs:1, orange_glazed_terracotta:2, emerald_ore:2, cobblestone:23, azure_bluet:5, cracked_stone_bricks:2, light_gray_glazed_terracotta:4, mossy_cobblestone:8, white_terracotta:10\nNearby entities: item(7.6m), player(7.7m), item(7.9m), item(12m), rabbit(22.8m), rabbit(27.4m), rabbit(31.7m), rabbit(36.6m)\nHealth: 20 / 20\nHunger: 20 / 20\nPosition: x=-340.5, y=108, z=291.7\nEquipment: azure_bluet\nInventory (8/36): azure_bluetx5, dandelionx5, spruce_saplingx2, spruce_planksx20, dirtx8, coarse_dirtx3, spruce_logx1, gravelx6\nTask: Open crafting table or inventory grid and arrange planks in 3x3 pattern leaving center empty\nContext: ## Retrieved Skills (reuse these if applicable):\n\n// 用橡木木板合成一个工作台。\nasync function craftWorkbench(bot, params = {}) { const { plankCount = 4 } = params; const planks = bot.inventory.items().find(item => item.name === 'oak_planks'); if (!planks || planks.count < plankCount) { bot.chat('橡木木板不足，需要至少 {} 个。', plankCount); if (params.logCount && params.logCount >= 1) { bot.chat('用橡木原木合成橡木木板。'); await craftItem(bot, 'oak_planks', plankCount); } else { throw new Error('没有足够的橡木原木来合成木板。'); } } bot.chat('开始用橡木木板合成工作台。'); await craftItem(bot, 'crafting_table', 1); bot.chat('成功合成工作台。'); }\n\n// 用手破坏指定类型的1个原木\nasync function breakOneLog(bot, params = {}) { \n    const logType = params.logType || 'oak_log';\n    // 1. 寻找附近的原木\n    const logs = bot.findNearbyBlocks(logType, 32, 10);\n    if (logs.length === 0) {\n        bot.chat(`附近没有找到 ${logType} 原木，开始探索寻找。`);\n        // 随机选择一个方向探索\n        const directions = ['north', 'south', 'east', 'west'];\n        const randomDir = directions[Math.floor(Math.random() * directions.length)];\n        await exploreUntil(bot, randomDir, 64, () => {\n            const foundLogs = bot.findNearbyBlocks(logType, 32, 10);\n            return foundLogs.length > 0;\n        });\n    }\n    // 重新获取原木位置\n    const logsAfter = bot.findNearbyBlocks(logType, 32, 10);\n    if (logsAfter.length === 0) {\n        throw new Error(`探索后仍未找到 ${logType} 原木`);\n    }\n    const targetLog = logsAfter[0];\n    bot.chat(`找到 ${logType} 原木在 ${targetLog.x}, ${targetLog.y}, ${targetLog.z}`);\n\n    // 2. 移动到原木附近（距离2格以内）\n    await moveToPosition(bot, targetLog.x, targetLog.y, targetLog.z, 2);\n\n    // 3. 破坏1个原木（mineBlock会自动使用空手）\n    await mineBlock(bot, logType, 1);\n\n    // 4. 捡起掉落的物品\n    await pickupNearbyItems(bot);\n    bot.chat(`成功破坏1个 ${logType} 原木并捡起掉落物。`);\n}\n\n// 收集指定数量的橡木原木\nasync function collectMoreLogs(bot, params = {}) { \n    const logType = params.logType || 'oak_log';\n    const targetCount = params.targetCount || 3;\n    const maxAttempts = params.maxAttempts || 10;\n    bot.chat(`当前有 ${bot.inventory.items().find(item => item.name === logType)?.count || 0} 个 ${logType}，需要再收集 ${targetCount} 个`);\n    let currentCount = bot.inventory.items().find(item => item.name === logType)?.count || 0;\n    let attempts = 0;\n    while (currentCount < targetCount && attempts < maxAttempts) {\n        attempts++;\n        bot.chat(`开始第 ${attempts} 次尝试收集 ${logType} 原木`);\n        await breakOneLog(bot, { logType });\n        currentCount = bot.inventory.items().find(item => item.name === logType)?.count || 0;\n        bot.chat(`收集后现在有 ${currentCount} 个 ${logType} 原木`);\n        if (currentCount >= targetCount) {\n            bot.chat(`已收集足够 ${logType} 原木，当前 ${currentCount} 个`);\n            break;\n        }\n    }\n    const finalCount = bot.inventory.items().find(item => item.name === logType)?.count || 0;\n    if (finalCount >= targetCount) {\n        bot.chat(`任务完成！总共收集了 ${finalCount} 个 ${logType} 原木`);\n    } else {\n        bot.chat(`未能收集足够 ${logType} 原木，当前只有 ${finalCount} 个`);\n    }\n}\n\n\n## Past Experience:\n\n【近期对话记录】\n[user]: 帮我采集10朵小花\n[agent]: ✅ 帮我采集10朵小花 完成（3 次尝试）\n[user]: 建造一个箱子\nCritique: N/A\n[重试要求] 请更保守：增加距离/背包检查、使用 exploreUntil 等容错手段，避免重复上次失败做法。",
+  "llm_response_raw": "Explain: 上次失败是因为 `moveToPosition` 寻路到工作台时超时。从 Nearby blocks 看，附近没有 crafting_table，但代码中 `bot.findNearbyBlocks(\"crafting_table\", 32, 10)` 返回了数组（可能是误判或缓存问题），导致尝试移动到不存在的工作台而超时。此外，代码在放置工作台时使用了 `dirt` 和 `stone` 作为地面，但附近有 `grass_block` 等更多选择，应优先使用更常见的地面方块。\n\nPlan:\n1. 检查背包是否有云杉木板，若不足则报错（任务要求排列木板，假设已有）。\n2. 重新扫描附近工作台，使用更可靠的扫描方式（`bot.scanNearby` 或 `bot.findNearbyBlocks` 但增加验证）。\n3. 若找到工作台，确保目标坐标有效（非空气），然后移动并使用。\n4. 若没有工作台，则合成一个工作台（使用控制原语 `craftItem`）。\n5. 放置工作台：寻找安全地面（优先 grass_block、dirt、stone 等），计算放置位置（地面上方空气格），确保不与 bot 位置重叠。\n6. 移动到工作台旁并激活。\n7. 报告工作台已打开，准备排列木板。\n\nCode:\n```javascript\nasync function arrangePlanksInCraftingGrid(bot) {\n    // 1. 检查背包木板\n    const planks = bot.inventory.items().find(item => item.name === \"spruce_planks\");\n    if (!planks || planks.count < 4) {\n        throw new Error(\"需要至少4个云杉木板来排列3x3图案\");\n    }\n    bot.chat(\"背包中有20个云杉木板，足够排列。\");\n\n    // 2. 寻找附近的工作台（重新扫描，避免缓存）\n    const nearby = bot.scanNearby(24);\n    if (nearby[\"crafting_table\"] && nearby[\"crafting_table\"] > 0) {\n        // 使用 findNearbyBlocks 获取具体坐标\n        const craftingTables = bot.findNearbyBlocks(\"crafting_table\", 32, 5);\n        if (craftingTables.length > 0) {\n            const tablePos = craftingTables[0];\n            bot.chat(`发现工作台在 ${tablePos.x}, ${tablePos.y}, ${tablePos.z}，前往使用。`);\n            await moveToPosition(bot, tablePos.x, tablePos.y, tablePos.z, 2);\n            await activateNearestBlock(bot, \"crafting_table\");\n            bot.chat(\"工作台已打开，可以排列云杉木板成3x3图案（中心留空）。\");\n            return;\n        }\n    }\n\n    // 3. 合成工作台\n    bot.chat(\"附近没有工作台，合成一个工作台。\");\n    await craftItem(bot, \"crafting_table\", 1);\n\n    // 4. 放置工作台\n    // 寻找安全地面：优先 grass_block, dirt, stone, coarse_dirt\n    const groundTypes = [\"grass_block\", \"dirt\", \"stone\", \"coarse_dirt\", \"podzol\"];\n    let ground = null;\n    for (const type of groundTypes) {\n        const blocks = bot.findNearbyBlocks(type, 5, 10);\n        if (blocks.length > 0) {\n            ground = blocks[0];\n            break;\n        }\n    }\n    if (!ground) {\n        // 如果找不到上述地面，尝试更远距离搜索\n        for (const type of groundTypes) {\n            const blocks = bot.findNearbyBlocks(type, 32, 10);\n            if (blocks.length > 0) {\n                ground = blocks[0];\n                break;\n            }\n        }\n    }\n    if (!ground) {\n        throw new Error(\"找不到合适的地面放置工作台\");\n    }\n    // 放置位置：地面上方一格，确保是空气且不与 bot 重叠\n    const placePos = { x: ground.x, y: ground.y + 1, z: ground.z };\n    // 检查 bot 当前位置，若太近则调整放置位置（例如向 x 或 z 偏移 2 格）\n    const botPos = bot.entity.position;\n    if (Math.abs(botPos.x - placePos.x) < 2 && Math.abs(botPos.z - placePos.z) < 2) {\n        placePos.x += 2;\n        placePos.z += 2;\n        bot.chat(\"调整工作台放置位置以避免重叠。\");\n    }\n    bot.chat(`将工作台放置在 ${placePos.x}, ${placePos.y}, ${placePos.z}`);\n    await placeItem(bot, \"crafting_table\", placePos);\n\n    // 5. 移动到工作台旁边（保持 2 格距离）\n    await moveToPosition(bot, placePos.x, placePos.y, placePos.z, 2);\n\n    // 6. 激活工作台\n    await activateNearestBlock(bot, \"crafting_table\");\n\n    // 7. 报告完成\n    bot.chat(\"工作台已打开，云杉木板已准备好排列成3x3图案（中心留空）。\");\n}\n```",
+  "rag_context": ""
+}

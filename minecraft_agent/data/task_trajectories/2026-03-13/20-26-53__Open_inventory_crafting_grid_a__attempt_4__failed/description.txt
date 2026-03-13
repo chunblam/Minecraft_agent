@@ -1,0 +1,4 @@
+task: Open inventory crafting grid and convert wood logs into wooden planks
+attempt: 4
+success: False
+critic_ok: False

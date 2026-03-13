@@ -317,10 +317,10 @@ function buildObservation(bot) {
         },
     };
 
-    // 附近方块（16格内）
+    // 附近方块（24格内，步长2）
     const nearbyBlocks = {};
     if (mcData) {
-        const scanRadius = 16;
+        const scanRadius = 24;
         for (let x = -scanRadius; x <= scanRadius; x += 2) {
             for (let y = -8; y <= 8; y += 2) {
                 for (let z = -scanRadius; z <= scanRadius; z += 2) {
@@ -333,12 +333,12 @@ function buildObservation(bot) {
         }
     }
 
-    // 附近实体
+    // 附近实体（48格内）
     const nearbyEntities = [];
     for (const entity of Object.values(bot.entities)) {
         if (entity === bot.entity) continue;
         const dist = entity.position.distanceTo(pos);
-        if (dist < 32) {
+        if (dist < 48) {
             nearbyEntities.push({
                 name: entity.name || entity.username || "unknown",
                 type: entity.type,

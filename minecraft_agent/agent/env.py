@@ -75,8 +75,15 @@ class MineflayerEnv:
             timeout=aiohttp.ClientTimeout(total=self.request_timeout)
         )
 
-        if self.auto_start_server and not await self._ping_server():
-            await self._start_node_server()
+        # 若端口上已有 Node 但非本进程启动（上次运行异常退出留下的），先关掉再起新的，避免复用卡死的进程
+        if self.auto_start_server:
+            if await self._ping_server() and self._node_process is None:
+                logger.warning("[Env] 检测到上次遗留的 Node 进程，先关闭再重新启动…")
+                await self._kill_server_on_port(self.server_port)
+                await asyncio.sleep(1)
+                await self._start_node_server()
+            elif not await self._ping_server():
+                await self._start_node_server()
 
         payload = dict(
             host=self.mc_host, port=self.mc_port,
@@ -85,20 +92,36 @@ class MineflayerEnv:
         try:
             async with self._session.post(
                 f"{self.server_url}/start", json=payload,
-                timeout=aiohttp.ClientTimeout(total=45),
+                timeout=aiohttp.ClientTimeout(total=60),
             ) as resp:
                 data = await resp.json()
                 if resp.status != 200:
                     raise RuntimeError(f"Bot 启动失败: {data}")
                 self._started = True
                 return data.get("game_state", {})
+        except asyncio.TimeoutError as e:
+            if self._session:
+                await self._session.close()
+                self._session = None
+            raise RuntimeError(
+                f"连接 MC 超时（60s 内 Node 未返回）。请确认："
+                f" 1) Minecraft 已启动且「对局域网开放」；"
+                f" 2) .env 中 MC_HOST={self.mc_host} MC_PORT={self.mc_port} 正确；"
+                f" 3) 若在 WSL 连 Windows，防火墙需放行 25565。"
+            ) from e
         except aiohttp.ServerDisconnectedError as e:
+            if self._session:
+                await self._session.close()
+                self._session = None
             raise RuntimeError(
                 f"Node 服务在连接 MC ({self.mc_host}:{self.mc_port}) 时断开。"
                 " 请确认：1) 游戏内已「对局域网开放」；2) Windows 防火墙放行 25565；"
                 f" 3) .env 中 MC_HOST 为 WSL 可见的 Windows IP。原始错误: {e}"
             ) from e
         except aiohttp.ClientError as e:
+            if self._session:
+                await self._session.close()
+                self._session = None
             raise RuntimeError(
                 f"请求 Node /start 失败 (MC={self.mc_host}:{self.mc_port}): {e}"
             ) from e
@@ -245,6 +268,27 @@ class MineflayerEnv:
                     return r.status == 200
         except Exception:
             return False
+
+    async def _kill_server_on_port(self, port: int) -> None:
+        """结束占用端口的进程（用于清理上次遗留的 Node）。"""
+        import shutil
+        for cmd in (
+            ["fuser", "-k", f"{port}/tcp"],
+            ["sh", "-c", f"kill -9 $(lsof -ti :{port}) 2>/dev/null || true"],
+        ):
+            exe = cmd[0] if cmd[0] != "sh" else "sh"
+            if shutil.which(exe):
+                try:
+                    p = await asyncio.create_subprocess_exec(
+                        *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+                    )
+                    await asyncio.wait_for(p.wait(), timeout=5)
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
+                if not await self._ping_server():
+                    return
+        logger.debug("[Env] 未能通过 fuser/lsof 结束端口进程，可能需手动关闭")
 
     def _is_node_process_alive(self) -> bool:
         """Node 子进程是否仍在运行（参考 Voyager 的 is_running）。"""

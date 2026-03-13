@@ -1,0 +1,4 @@
+task: 将你背包的东西都存入箱子里
+attempt: 3
+success: False
+critic_ok: False

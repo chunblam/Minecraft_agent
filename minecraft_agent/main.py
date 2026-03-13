@@ -30,7 +30,7 @@ AUTONOMOUS_FIRST_DELAY_S=int(os.getenv("AUTONOMOUS_FIRST_DELAY_SECONDS","15"))
 AUTONOMOUS_IDLE_S=int(os.getenv("AUTONOMOUS_IDLE_SECONDS","15"))
 
 def _is_system_chat_message(msg: str) -> bool:
-    """过滤掉系统/控制台类消息：/ 开头为执行命令，不进入后续流程；传送等系统提示也过滤。"""
+    """过滤掉系统/控制台类消息：/ 开头为执行命令、命令执行后的服务器反馈等，不当作任务。"""
     if not msg or len(msg) > 200:
         return True
     m = msg.strip()
@@ -41,6 +41,14 @@ def _is_system_chat_message(msg: str) -> bool:
         return True
     if "已将" in m_lower and "传送" in m_lower:
         return True
+    # 命令执行后服务器反馈（如 /gamemode 后的 "Set own game mode to Survival Mode]"）
+    if "game mode" in m_lower or "own game mode" in m_lower:
+        return True
+    if "mode set to" in m_lower or "set to " in m_lower and ("mode" in m_lower or "gamemode" in m_lower):
+        return True
+    if m_lower.startswith("unknown command") or m_lower.startswith("[") or m.rstrip().endswith("]"):
+        if any(x in m_lower for x in ("command", "mode", "set", "game", "server")):
+            return True
     return False
 
 async def main():
@@ -56,7 +64,12 @@ async def main():
         logger.warning(f"RAG 不可用: {e}")
     env=MineflayerEnv(mc_host=MC_HOST,mc_port=MC_PORT,username=MC_USERNAME,server_port=MINEFLAYER_PORT,auto_start_server=True)
     env_module._env_instance=env
-    game_state=await env.start(reset="soft")
+    logger.info("正在连接 MC 服务器（最多等待约 60s）…")
+    try:
+        game_state=await env.start(reset="soft")
+    except (RuntimeError, asyncio.TimeoutError, TimeoutError) as e:
+        logger.error(f"连接 MC 失败: {e}")
+        raise
     logger.info(f"✅ Bot 已加入，位置: {game_state.get('position')}")
     agent=VoyagerAgent(llm=llm,memory=memory,skill_lib=skill_lib,personality=personality,retriever=retriever)
     # 启动时自动将当前技能库导出到 data/skill_db_export，便于快速查验（可通过 EXPORT_SKILLS_ON_START=0 关闭）
@@ -103,11 +116,19 @@ async def main():
             for entry in new_msgs:
                 u=entry.get("username",""); m=entry.get("message","").strip()
                 if u.lower()==bot_name or not m: continue
+                # 以 / 开头的消息一律视为 MC 命令，不当作任务，并开启命令反馈忽略窗口
+                if m.startswith("/"):
+                    key = f"{u}:{m}:{int(entry.get('time',0)/5000)}"
+                    processed_msgs.add(key)
+                    last_slash_time = time.time()
+                    logger.log("MC_PLAYER", f"【MC】<{u}> {m[:80]}{'...' if len(m)>80 else ''} (已忽略-玩家命令)")
+                    continue
                 if _is_system_chat_message(m):
                     logger.log("MC_PLAYER", f"【MC】<{u}> {m[:80]}{'...' if len(m)>80 else ''} (已忽略-系统消息)")
                     key = f"{u}:{m}:{int(entry.get('time',0)/5000)}"
                     processed_msgs.add(key)
-                    if m.startswith("/"):
+                    # 命令执行后的反馈也开启反馈窗口，避免紧随其后的系统多行当作任务
+                    if "game mode" in m.lower() or ("set " in m.lower() and "mode" in m.lower()) or (m.rstrip().endswith("]") and ("mode" in m.lower() or "command" in m.lower())):
                         last_slash_time = time.time()
                     continue
                 key=f"{u}:{m}:{int(entry.get('time',0)/5000)}"
@@ -179,6 +200,11 @@ async def main():
                 async def _send_chat(msg):
                     try: await env.send_action("chat",{"message":msg})
                     except Exception: pass
+                try:
+                    s=await env.observe()
+                    if s: game_state.update(s)
+                except Exception as e:
+                    logger.debug(f"用户任务前 observe 失败: {e}")
                 logger.log("FLOW", f"Main → agent.run(message={m[:40]!r})")
                 current_task_ref["task"]=asyncio.create_task(agent.run(game_state,m))
                 current_task_ref["task"].add_done_callback(_done_cb)
@@ -186,6 +212,10 @@ async def main():
             t=current_task_ref["task"]
             if autonomous_enabled and (not t or t.done()):
                 now=time.time()
+                if t and t.done():
+                    last_autonomous_finish_ref["t"]=now
+                    if current_task_ref["task"] is t:
+                        current_task_ref["task"]=None
                 if last_autonomous_finish_ref["t"] is None:
                     # 尚未完成过任何自主任务：用开启时间判断
                     start=autonomous_enabled_at
@@ -194,14 +224,20 @@ async def main():
                     start=last_autonomous_finish_ref["t"]
                     wait_sec=AUTONOMOUS_IDLE_S
                 if start is not None and wait_sec>0 and (now-start)>=wait_sec:
+                    try:
+                        s=await env.observe()
+                        if s: game_state.update(s)
+                    except Exception as e:
+                        logger.debug(f"run_autonomous 前 observe 失败: {e}")
                     logger.log("FLOW", "Main → run_autonomous")
-                    def _done_auto(t):
-                        current_task_ref["task"]=None
-                        if t.cancelled():
+                    def _done_auto(completed_task):
+                        if current_task_ref["task"] is completed_task:
+                            current_task_ref["task"]=None
+                        if completed_task.cancelled():
                             return
                         last_autonomous_finish_ref["t"]=time.time()
                         try:
-                            r=t.result()
+                            r=completed_task.result()
                             reply=(r or {}).get("display_message","")
                             if reply:
                                 logger.log("MC_AGENT", f"【MC】<{MC_USERNAME}> {reply}")

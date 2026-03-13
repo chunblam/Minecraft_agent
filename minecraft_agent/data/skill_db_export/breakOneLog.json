@@ -1,0 +1,14 @@
+{
+  "name": "breakOneLog",
+  "description": "用手破坏指定类型的1个原木",
+  "code": "async function breakOneLog(bot, params = {}) { \n    const logType = params.logType || 'oak_log';\n    // 1. 寻找附近的原木\n    const logs = bot.findNearbyBlocks(logType, 32, 10);\n    if (logs.length === 0) {\n        bot.chat(`附近没有找到 ${logType} 原木，开始探索寻找。`);\n        // 随机选择一个方向探索\n        const directions = ['north', 'south', 'east', 'west'];\n        const randomDir = directions[Math.floor(Math.random() * directions.length)];\n        await exploreUntil(bot, randomDir, 64, () => {\n            const foundLogs = bot.findNearbyBlocks(logType, 32, 10);\n            return foundLogs.length > 0;\n        });\n    }\n    // 重新获取原木位置\n    const logsAfter = bot.findNearbyBlocks(logType, 32, 10);\n    if (logsAfter.length === 0) {\n        throw new Error(`探索后仍未找到 ${logType} 原木`);\n    }\n    const targetLog = logsAfter[0];\n    bot.chat(`找到 ${logType} 原木在 ${targetLog.x}, ${targetLog.y}, ${targetLog.z}`);\n\n    // 2. 移动到原木附近（距离2格以内）\n    await moveToPosition(bot, targetLog.x, targetLog.y, targetLog.z, 2);\n\n    // 3. 破坏1个原木（mineBlock会自动使用空手）\n    await mineBlock(bot, logType, 1);\n\n    // 4. 捡起掉落的物品\n    await pickupNearbyItems(bot);\n    bot.chat(`成功破坏1个 ${logType} 原木并捡起掉落物。`);\n}",
+  "parameters": {
+    "logType": "要破坏的原木类型，默认为 'oak_log'"
+  },
+  "preconditions": [
+    "bot必须具有findNearbyBlocks, exploreUntil, moveToPosition, mineBlock, pickupNearbyItems等方法"
+  ],
+  "reliability_score": 1.0,
+  "success_count": 1,
+  "fail_count": 0
+}

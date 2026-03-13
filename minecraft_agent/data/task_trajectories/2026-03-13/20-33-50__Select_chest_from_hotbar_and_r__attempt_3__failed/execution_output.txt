@@ -1,0 +1,9 @@
+[chat] 背包中没有箱子，需要合成。
+[chat] 已有 20 个 spruce_planks，足够合成箱子。
+[chat] 正在合成箱子...
+[chat] 已合成 1 个 chest
+[chat] 箱子合成完成。
+[chat] 已装备 chest 到 hand
+[chat] 已装备箱子。
+[chat] 在位置 -325, 112, 328 放置箱子。
+[ERROR] Event blockUpdate:(-325, 112, 328) did not fire within timeout of 5000ms

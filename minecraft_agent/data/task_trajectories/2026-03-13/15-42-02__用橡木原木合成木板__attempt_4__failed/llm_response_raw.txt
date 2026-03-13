@@ -1,0 +1,51 @@
+Explain: 上次错误是因为 `craftItem` 函数尝试一次性合成 24 个木板，但可能因为工作台空间不足或合成配方限制导致“missing ingredient”错误。控制原语 `craftItem` 内部可能无法处理一次合成大量物品的情况。应该改为分批合成，每次合成一组（4个木板对应1个原木），或者使用更小的批量。
+
+Plan:
+1. 检查背包中的橡木原木数量，如果没有则结束。
+2. 计算需要合成的木板总数（每个原木合成4个木板）。
+3. 分批合成木板：每次合成4个木板（对应1个原木），循环直到用完所有原木。
+4. 每次合成后检查背包状态，确保合成成功。
+5. 报告最终结果。
+
+Code:
+```javascript
+async function craftAllPlanksFromLogs(bot) {
+    // 检查背包中的橡木原木数量
+    const logs = bot.inventory.items().find(item => item.name === "oak_log");
+    const logCount = logs ? logs.count : 0;
+    bot.chat(`背包中有 ${logCount} 个橡木原木`);
+
+    if (logCount === 0) {
+        bot.chat("没有橡木原木，无法合成木板");
+        return;
+    }
+
+    // 计算需要合成的木板总数（每个原木合成4个木板）
+    const planksToCraft = logCount * 4;
+    bot.chat(`将使用所有 ${logCount} 个橡木原木合成 ${planksToCraft} 个木板`);
+
+    // 分批合成：每次合成4个木板（对应1个原木）
+    let craftedCount = 0;
+    for (let i = 0; i < logCount; i++) {
+        bot.chat(`正在合成第 ${i + 1} 组木板（4个）...`);
+        try {
+            await craftItem(bot, "oak_planks", 4);
+            craftedCount += 4;
+            bot.chat(`已合成 ${craftedCount} 个木板`);
+        } catch (err) {
+            bot.chat(`合成第 ${i + 1} 组时出错: ${err.message}`);
+            // 继续尝试下一组
+        }
+        // 短暂等待确保状态更新
+        await bot.waitForTicks(5);
+    }
+
+    // 检查合成后的木板数量
+    const planks = bot.inventory.items().find(item => item.name === "oak_planks");
+    const plankCount = planks ? planks.count : 0;
+    const logsAfter = bot.inventory.items().find(item => item.name === "oak_log");
+    const remainingLogs = logsAfter ? logsAfter.count : 0;
+    
+    bot.chat(`合成完成：现在有 ${plankCount} 个橡木木板，剩余 ${remainingLogs} 个橡木原木`);
+}
+```

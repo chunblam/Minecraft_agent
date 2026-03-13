@@ -1,0 +1,4 @@
+task: Open crafting table or inventory grid and arrange planks in 3x3 pattern leaving center empty
+attempt: 3
+success: False
+critic_ok: False

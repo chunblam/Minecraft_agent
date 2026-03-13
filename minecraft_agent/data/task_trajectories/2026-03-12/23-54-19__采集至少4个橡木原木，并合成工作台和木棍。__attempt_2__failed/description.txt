@@ -1,0 +1,4 @@
+task: 采集至少4个橡木原木，并合成工作台和木棍。
+attempt: 2
+success: False
+critic_ok: False

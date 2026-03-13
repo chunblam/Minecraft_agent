@@ -1,0 +1,7 @@
+[chat] 开始采集橡木原木
+[chat] 已挖掘 4 个 oak_log
+[chat] 已采集橡木原木，当前数量: 0
+[chat] 尝试合成工作台
+[chat] 合成工作台失败: 合成 crafting_table 需要工作台，但附近没有且背包中也没有
+[chat] 尝试先合成木板
+[ERROR] 合成 oak_planks 需要工作台，但附近没有且背包中也没有

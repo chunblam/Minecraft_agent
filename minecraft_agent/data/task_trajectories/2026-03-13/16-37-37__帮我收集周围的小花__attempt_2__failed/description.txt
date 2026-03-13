@@ -1,0 +1,4 @@
+task: 帮我收集周围的小花
+attempt: 2
+success: False
+critic_ok: False

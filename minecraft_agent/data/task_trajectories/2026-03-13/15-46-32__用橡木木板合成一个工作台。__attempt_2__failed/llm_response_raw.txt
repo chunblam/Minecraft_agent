@@ -1,0 +1,27 @@
+Explain: 这是第一次执行任务，没有之前的错误。任务很简单：用橡木木板合成一个工作台。当前背包有40个橡木木板，已经足够合成。需要先确保手持空手（因为合成不需要工具），然后调用 craftItem 控制原语合成工作台。
+
+Plan:
+1. 检查背包中是否有 crafting_table，如果有则任务已完成。
+2. 如果没有，确保手持空手（equipItem "air"）。
+3. 使用 craftItem 合成一个工作台。
+4. 报告合成结果。
+
+Code:
+```javascript
+async function craftWorkbenchFromPlanks(bot) {
+    // 检查是否已有工作台
+    const workbench = bot.inventory.items().find(item => item.name === "crafting_table");
+    if (workbench) {
+        bot.chat("背包中已有工作台，任务完成。");
+        return;
+    }
+
+    // 确保手持空手进行合成
+    await equipItem(bot, "air", "hand");
+
+    // 合成工作台
+    bot.chat("开始用橡木木板合成工作台。");
+    await craftItem(bot, "crafting_table", 1);
+    bot.chat("成功合成工作台。");
+}
+```

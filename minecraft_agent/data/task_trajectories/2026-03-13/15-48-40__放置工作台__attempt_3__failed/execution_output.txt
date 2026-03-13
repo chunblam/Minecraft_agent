@@ -1,0 +1,16 @@
+[chat] 背包中有 1 个工作台。
+[chat] 放置位置太近，寻找另一个位置。
+[chat] 将在位置 -541, 69, 596 放置工作台。
+[chat] 挖掘 oak_log 时出错: The goal was changed before it could be completed!
+[chat] 已挖掘 0 个 oak_log
+[chat] 成功破坏1个 oak_log 原木并捡起掉落物。
+[chat] 收集后现在有 4 个 oak_log 原木
+[chat] 已收集足够 oak_log 原木，当前 4 个
+[chat] 任务完成！总共收集了 4 个 oak_log 原木
+[chat] 将使用 4 个橡木原木合成 16 个木板
+[chat] 正在合成第 1 组木板（4个）...
+[chat] 已合成 4 个 oak_planks
+[chat] 已合成 4 个木板
+[chat] 正在合成第 2 组木板（4个）...
+[chat] 已放置 crafting_table 在 (-541,69,596)
+[chat] 工作台放置完成！

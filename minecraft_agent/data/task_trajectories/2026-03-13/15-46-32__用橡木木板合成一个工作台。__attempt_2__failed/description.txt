@@ -1,0 +1,4 @@
+task: 用橡木木板合成一个工作台。
+attempt: 2
+success: False
+critic_ok: False

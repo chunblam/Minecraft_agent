@@ -257,7 +257,15 @@ function inject(bot, mcData) {
     // ★ equipItem — 装备物品
     // ─────────────────────────────────────────────────────────────────────────
     bot.equipItem = async (name, destination = "hand") => {
-        const cleanName = name.replace("minecraft:", "");
+        const cleanName = (name || "").replace("minecraft:", "");
+        // air = 空手：不查背包，直接卸下手中物品（mineflayer 的 unequip 接受 destination "hand"）
+        if (cleanName === "air") {
+            if (bot.heldItem) {
+                await bot.unequip("hand");
+                bot.chat("已空手");
+            }
+            return;
+        }
         const item = bot.inventory.items().find(i => i.name === cleanName);
         if (!item) throw new Error(`背包中没有 ${cleanName}`);
         await bot.equip(item, destination);

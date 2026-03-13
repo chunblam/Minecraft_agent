@@ -15,6 +15,19 @@ ReAct 在「代码生成」模式下的体现：
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 游戏状态语义（供任务生成、代码生成、Critic 引用）
+# ─────────────────────────────────────────────────────────────────────────────
+GAME_STATE_SEMANTICS = """游戏状态各字段含义与探测范围：
+- position: Bot 当前坐标 {x, y, z}。
+- inventory: 背包物品列表，每项含 item(游戏内名称)、count、slot。
+- equipment: 手持(mainhand)与护甲。
+- health / food: 生命与饥饿值。
+- time: 游戏内时间 (0–24000)，可推昼夜。
+- biome: 生物群系。
+- nearby_blocks: 以 Bot 为中心约 **24 格半径、Y±8 格** 内的方块 **类型及数量**（无坐标）。若已有 chest、crafting_table、furnace 等表示地图上已存在该设施，可直接前往使用（如打开箱子存物、工作台合成、熔炉冶炼），不必要求背包中也有。
+- nearby_entities: **48 格内**实体，含 name、type、distance、position。"""
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ★ 代码生成 System Prompt（Voyager action_template 对等版）
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -66,12 +79,13 @@ bot.inventory.items()                            // 返回背包物品 [{name, c
 6. 不写无限循环，不用 `bot.on` / `bot.once`，不要写递归函数。
 7. 所有变量声明在函数内部。
 8. bot.findBlocks 的 maxDistance 始终设为 32。
-9. 需要工作台时：先检查背包 → 没有则 craftItem("crafting_table") → placeItem 放置。
-10. 探索时每次随机选不同方向。
-11. placeItem 的第三个参数只传 `{x, y, z}` 对象；禁止使用 bot.vec3、pos.floored 或未列出的 API。
-12. **手持与任务匹配**：执行任何任务前，根据当前步骤判断应持有什么（空手、工具、消耗品等）。需要空手交互时先 `equipItem(bot, "air", "hand")`；需要挖掘/砍伐时先装备对应工具（镐→石头/矿石，斧→木头等）；需要使用时再装备对应物品。Equipment 与 Inventory 已提供，请据此决策。
-13. **代码与行为一致**：代码中的 bot.chat() 与注释必须与真实执行逻辑一致：不要写未实现的描述（例如写了「向飞行方向移动」就必须用实际方向或可观测量驱动移动，不能写固定方向）；若逻辑分支与 chat 描述对应，实现必须按该分支执行，不得简化成固定方向或占位逻辑。
-14. **非标准方块（草、花、树叶等）**：草、花、树叶、作物、藤蔓、蘑菇等均视为可挖掘/采集的方块，一律用 `mineBlock(bot, "block_name", count)` 与 `bot.findBlocks("block_name", 32, n)`；方块名用游戏内标准名，如草/草丛：short_grass、tall_grass、grass_block；花：poppy、dandelion、blue_orchid；树叶：oak_leaves、birch_leaves。任务涉及击打/采集/破坏此类方块时，必须用 mineBlock + 正确方块名；nearby_blocks 与 findBlocks 可确认当前环境中的方块名。
+9. 需要工作台/熔炉时：若 **Nearby blocks** 中已有 crafting_table、furnace 等，表示地图上已存在该方块，可直接寻路到该方块并使用（如打开工作台合成）；仅当 nearby_blocks 与背包都没有时再 craftItem 或 placeItem。
+10. **需要存/取物品时**：若 **Nearby blocks** 中已有 chest，表示世界中已有箱子，应先寻路到该箱子并打开再执行存入或取出；仅当 nearby_blocks 与背包都没有箱子时才合成或放置新箱子。
+11. 探索时每次随机选不同方向。
+12. placeItem 的第三个参数只传 `{x, y, z}` 对象；禁止使用 bot.vec3、pos.floored 或未列出的 API。
+13. **手持与任务匹配**：执行任何任务前，根据当前步骤判断应持有什么（空手、工具、消耗品等）。需要空手交互时先 `equipItem(bot, "air", "hand")`；需要挖掘/砍伐时先装备对应工具（镐→石头/矿石，斧→木头等）；需要使用时再装备对应物品。Equipment 与 Inventory 已提供，请据此决策。
+14. **代码与行为一致**：代码中的 bot.chat() 与注释必须与真实执行逻辑一致：不要写未实现的描述（例如写了「向飞行方向移动」就必须用实际方向或可观测量驱动移动，不能写固定方向）；若逻辑分支与 chat 描述对应，实现必须按该分支执行，不得简化成固定方向或占位逻辑。
+15. **非标准方块（草、花、树叶等）**：草、花、树叶、作物、藤蔓、蘑菇等均视为可挖掘/采集的方块，一律用 `mineBlock(bot, "block_name", count)` 与 `bot.findBlocks("block_name", 32, n)`；方块名用游戏内标准名，如草/草丛：short_grass、tall_grass、grass_block；花：poppy、dandelion、blue_orchid；树叶：oak_leaves、birch_leaves。任务涉及击打/采集/破坏此类方块时，必须用 mineBlock + 正确方块名；nearby_blocks 与 findBlocks 可确认当前环境中的方块名。
 
 ## 响应格式（严格遵守，缺一不可）
 
@@ -92,7 +106,7 @@ Execution error: {execution_error}
 Chat log: {chat_log}
 Biome: {biome}
 Time: {time_of_day}
-Nearby blocks: {nearby_blocks}
+Nearby blocks (约24格内地图方块类型与数量；若已有 crafting_table、furnace 等可直接寻路使用，无需再从背包放置): {nearby_blocks}
 Nearby entities: {nearby_entities}
 Health: {health} / 20
 Hunger: {food} / 20
@@ -144,13 +158,15 @@ Extract reusable skill (JSON only):"""
 
 CRITIC_SYSTEM_PROMPT = """You are a Minecraft task success evaluator.
 Be STRICT: success=true only if fully met.
-Check inventory, position, entities as needed.
+Check inventory, position, nearby_blocks, entities as needed.
+For count-based tasks (挖N个、再N个、再挖N个、再收集N个等), base success on **inventory and nearby_blocks counts in game_state**; do not judge failure from execution narrative alone.
 Critique must be specific and actionable (max 2 sentences).
 Output ONLY: {"success": true/false, "critique": "..."}"""
 
 CRITIC_HUMAN_TEMPLATE = """Task: {task}
 Position: {position}
 Inventory: {inventory}
+Nearby blocks (地图附近方块类型及数量，crafting_table/furnace 表示已放置): {nearby_blocks}
 Nearby entities: {nearby_entities}
 Health: {health}/20
 Execution output: {last_output}
@@ -207,24 +223,32 @@ Recent: {recent_memory}
 Next action? (JSON only):"""
 
 # 自主探索：智能下一任务生成器（参考 Voyager curriculum）
-AUTONOMOUS_TASK_GENERATOR_SYSTEM_PROMPT = """你是 Minecraft 自主探索的「下一任务生成器」。根据当前游戏状态、已学会的技能、近期经历、以及「参考成长路线指引」，输出一条适合作为下一步学习的任务（一句中文描述）。
+AUTONOMOUS_TASK_GENERATOR_SYSTEM_PROMPT = """你是 Minecraft 自主探索的「下一任务生成器」。输出一条适合作为下一步学习的任务（一句中文描述）。
 
 规则：
-- 生成下一任务时**优先参考「参考成长路线指引」**中的阶段与步骤，结合当前状态、已完成任务、已会技能，给出本阶段内的下一步任务。
+- **首要依据是当前游戏状态**：背包（inventory）、附近方块（nearby_blocks）、位置、时间等是生成任务的**第一依据**。生成任务时必须结合 inventory 与 nearby_blocks；若 nearby_blocks 已有工作台/熔炉，应生成使用该设施的下一步（如在工作台合成木棍），而不是「先合成/放置工作台」。具体任务必须与当前状态一致：例如背包已有 4 个原木就不要再生成「挖 1 个木头」；附近没有树则不要只生成「砍树」。参考成长路线仅用于**阶段与顺序**，不能脱离当前状态照抄指引。
+- 结合「参考成长路线指引」中的阶段与步骤，在**满足当前状态**的前提下，给出本阶段内的下一步任务；若状态已超过指引某步（如已有工作台），应生成下一步（如合成木棍），不要重复已完成步骤。
+- **任务复杂度（重要）**：初级阶段（已完成任务少、技能少）必须生成 **simple 单任务**——一句话只做**一件事**，例如「挖 1 个木头」「用木板合成工作台」「捡起附近掉落物」「用圆石合成石镐」。不要生成需要多步或多子任务才能完成的任务。遵守下方「任务复杂度要求」。
 - 避免重复 failed_tasks 中的高难度任务；不要一上来就生成「用末影之眼找地牢」「驯服马」等，除非状态已具备条件。
 - 优先选择与当前背包/环境匹配、且与已会技能衔接的「略难一点」的任务。
-- 初级示例：挖若干泥土、砍一棵树、合成工作台、捡起附近掉落物。
-- 中级示例：挖矿、驯服一只动物、制作木镐。
-- 高级示例：多步骤合成链、末影之眼找要塞（需先有末影之眼等）。
+- 初级示例（单任务）：挖 1 个木头、合成工作台、捡起附近掉落物、用原木合成木板。
+- 中级示例（单任务）：制作木镐、挖 5 个圆石、用圆石合成石镐。
+- 高级示例：多步骤合成链、末影之眼找要塞（需先有末影之眼等）——仅在中后期技能多时生成。
 
 仅输出一个 JSON，无其他文字：
 {"reasoning":"简短说明为何选该任务","task":"一句任务描述"}"""
 
-AUTONOMOUS_TASK_GENERATOR_HUMAN_TEMPLATE = """参考成长路线指引（来自知识库 guide）:
-{guide_context}
+AUTONOMOUS_TASK_GENERATOR_HUMAN_TEMPLATE = """【以下「当前游戏状态」为最新观测，生成任务必须以之为准，避免与状态矛盾。】
+状态说明：inventory=背包；nearby_blocks=约24格内地图方块类型及数量，若已有 crafting_table/furnace 表示已放置，可生成「在工作台/熔炉做 X」类任务。
 
 当前游戏状态:
 {game_state}
+
+参考成长路线指引（来自知识库 guide，仅作阶段与顺序参考）:
+{guide_context}
+
+任务复杂度要求：
+{complexity_hint}
 
 已学会的技能（名称与描述）:
 {learned_skills}

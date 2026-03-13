@@ -1,0 +1,7 @@
+[chat] 背包中没有箱子，需要合成。
+[chat] 没有木板，需要从原木制作木板。
+[chat] 有 3 个 spruce_log，可以制作木板。
+[chat] 放置工作台以合成木板。
+[chat] 已放置 crafting_table 在 (-326,112,328)
+[chat] 工作台已放置。
+[ERROR] Error: missing ingredient

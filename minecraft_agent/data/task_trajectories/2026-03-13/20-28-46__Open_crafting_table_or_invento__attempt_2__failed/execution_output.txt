@@ -1,0 +1,3 @@
+[chat] 发现附近有工作台，前往使用。
+[chat] 已到达 (-342,101,290) 附近
+[ERROR] Cannot read properties of null (reading 'position')

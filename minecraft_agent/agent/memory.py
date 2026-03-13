@@ -264,10 +264,10 @@ class MemoryManager:
             for mem in long_term_results:
                 context_parts.append(f"- {mem['content'][:200]}")
 
-        # 添加近期短期记忆
+        # 添加近期短期记忆（含对话、任务开始/结束、世界状态等）
         recent = self.short_term.get_recent(n=10)
         if recent:
-            context_parts.append("\n【近期对话记录】")
+            context_parts.append("\n【近期对话与状态】")
             for event in recent:
                 context_parts.append(f"[{event.get('role', '?')}]: {event.get('content', '')}")
 

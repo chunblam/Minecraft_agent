@@ -1,0 +1,38 @@
+Explain: 上次错误是因为 `equipItem(bot, "air", "hand")` 试图装备"air"，但"air"不是背包中的物品。实际上，要空手只需要不装备任何物品即可，或者使用正确的空手物品名"air"（但背包中确实没有）。控制原语 `equipItem` 要求物品必须在背包中。正确的做法是：合成前不需要特意装备空手，因为 `craftItem` 会自动处理。但为了安全，我们可以先检查当前手持物，如果是工具（如斧头）可能会影响合成，但当前手持的是 oak_planks（木板），这不会影响合成工作台。所以我们可以直接合成。
+
+Plan:
+1. 检查背包是否已有工作台，有则直接完成。
+2. 检查背包是否有足够的橡木木板（需要4个），当前有40个，足够。
+3. 直接调用 `craftItem(bot, "crafting_table", 1)` 合成工作台。
+4. 报告结果。
+
+Code:
+```javascript
+async function craftWorkbenchFromPlanks(bot) {
+    // 检查是否已有工作台
+    const workbench = bot.inventory.items().find(item => item.name === "crafting_table");
+    if (workbench) {
+        bot.chat("背包中已有工作台，任务完成。");
+        return;
+    }
+
+    // 检查是否有足够的橡木木板（需要4个）
+    const planks = bot.inventory.items().find(item => item.name === "oak_planks");
+    if (!planks || planks.count < 4) {
+        bot.chat("橡木木板不足，需要至少4个。");
+        // 如果有橡木原木，可以合成木板
+        const logs = bot.inventory.items().find(item => item.name === "oak_log");
+        if (logs && logs.count >= 1) {
+            bot.chat("用橡木原木合成橡木木板。");
+            await craftItem(bot, "oak_planks", 4); // 1个原木合成4个木板
+        } else {
+            throw new Error("没有足够的橡木原木来合成木板。");
+        }
+    }
+
+    // 合成工作台
+    bot.chat("开始用橡木木板合成工作台。");
+    await craftItem(bot, "crafting_table", 1);
+    bot.chat("成功合成工作台。");
+}
+```

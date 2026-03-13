@@ -1,0 +1,4 @@
+task: 放置工作台
+attempt: 3
+success: True
+critic_ok: True

@@ -1,0 +1,33 @@
+Code from the last round: N/A
+Execution error: N/A
+Chat log: N/A
+Biome: 39
+Time: day
+Nearby blocks: stone:569, granite:31, gravel:17, dirt:463, grass_block:65, tall_grass:9, short_grass:36, dandelion:5, cornflower:1, copper_ore:6, oxeye_daisy:4, oak_log:14, cobblestone:20, oak_stairs:12, oak_trapdoor:2
+Nearby entities: villager(9.9m), player(13.6m)
+Health: 20 / 20
+Hunger: 20 / 20
+Position: x=-452.8, y=64, z=345.6
+Equipment: nothing
+Inventory (0/36): empty
+Task: 采集至少4个橡木原木，并合成工作台和木棍。
+Context: ## Relevant Minecraft Knowledge:
+// 合成系统  # 合成系统
+
+## 工作台合成
+
+合成台（Crafting Table）提供 3×3 的合成格，是游戏中最核心的合成设备。
+
+【基础合成流程】
+1. 木头（任意木材） → 木板（4个）
+2. 木板（4个，放置成田字形） → 工作台
+3. 木板（3个，一排）+ 木棍（2个，下方两格） → 木镐
+4. 铁锭（5个，U字形）+ 木棍（2个）→ 铁桶
+5. 铁锭（3个，一排）+ 木棍（2个）→ 铁剑
+
+【常用合成配方】
+
+【火把（Torch）】
+1. 配方：木棍（下）+ 煤炭或木炭（上）
+2. 产出：
+Critique: N/A

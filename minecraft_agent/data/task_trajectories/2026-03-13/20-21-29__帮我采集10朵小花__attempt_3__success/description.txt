@@ -1,0 +1,4 @@
+task: 帮我采集10朵小花
+attempt: 3
+success: True
+critic_ok: True

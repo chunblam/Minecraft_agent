@@ -1,0 +1,21 @@
+[chat] 当前有 1 个橡木原木，需要再挖3个
+[chat] 开始挖掘第 1 个橡木原木
+[chat] 找到 oak_log 原木在 -538, 69, 585
+[chat] 已到达 (-538,69,585) 附近
+[chat] 已挖掘 1 个 oak_log
+[chat] 成功破坏1个 oak_log 原木并捡起掉落物。
+[chat] 已挖掘 1 个，现在有 2 个橡木原木
+[chat] 开始挖掘第 2 个橡木原木
+[chat] 找到 oak_log 原木在 -538, 70, 585
+[chat] 已到达 (-538,70,585) 附近
+[chat] 挖掘 oak_log 时出错: Took to long to decide path to goal!
+[chat] 已挖掘 0 个 oak_log
+[chat] 成功破坏1个 oak_log 原木并捡起掉落物。
+[chat] 已挖掘 2 个，现在有 6 个橡木原木
+[chat] 开始挖掘第 3 个橡木原木
+[chat] 找到 oak_log 原木在 -538, 71, 585
+[chat] 已到达 (-538,71,585) 附近
+[chat] 已挖掘 1 个 oak_log
+[chat] 成功破坏1个 oak_log 原木并捡起掉落物。
+[chat] 已挖掘 3 个，现在有 7 个橡木原木
+[chat] 任务完成！总共收集了 7 个橡木原木

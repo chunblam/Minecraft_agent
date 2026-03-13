@@ -1,0 +1,15 @@
+[chat] 背包中没有箱子，需要合成。
+[chat] 已合成 1 个 chest
+[chat] 箱子合成完成。
+[chat] 背包中已有箱子，准备放置。
+[chat] 已装备 chest 到 hand
+[chat] 已装备箱子。
+[chat] 找到放置位置：-324, 113, 327（在 undefined 上方）
+[chat] 已到达 (-324,113,327) 附近
+[chat] 已到达放置位置附近。
+[chat] 正在放置箱子...
+[chat] 已放置 chest 在 (-324,113,327)
+[chat] 箱子放置完成！
+[chat] 已到达 (-325,113,328) 附近
+[chat] 移动到箱子旁边，准备打开。
+[ERROR] Cannot read properties of null (reading 'position')

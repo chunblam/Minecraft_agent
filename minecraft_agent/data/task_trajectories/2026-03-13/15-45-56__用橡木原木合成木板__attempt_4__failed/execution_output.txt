@@ -1,0 +1,26 @@
+[chat] 当前有 0 个橡木原木
+[chat] 橡木原木不足，开始采集...
+[chat] 当前有 0 个 oak_log，需要再收集 4 个
+[chat] 开始第 1 次尝试收集 oak_log 原木
+[chat] 找到 oak_log 原木在 -536, 71, 591
+[chat] 已到达 (-536,71,591) 附近
+[chat] 挖掘 oak_log 时出错: Digging aborted
+[chat] 已挖掘 0 个 oak_log
+[chat] 成功破坏1个 oak_log 原木并捡起掉落物。
+[chat] 收集后现在有 0 个 oak_log 原木
+[chat] 开始第 2 次尝试收集 oak_log 原木
+[chat] 找到 oak_log 原木在 -539, 70, 597
+[chat] 已到达 (-539,70,597) 附近
+[chat] 已挖掘 1 个 oak_log
+[chat] 成功破坏1个 oak_log 原木并捡起掉落物。
+[chat] 收集后现在有 1 个 oak_log 原木
+[chat] 开始第 3 次尝试收集 oak_log 原木
+[chat] 找到 oak_log 原木在 -539, 69, 597
+[chat] 已到达 (-539,69,597) 附近
+[chat] 已挖掘 1 个 oak_log
+[chat] 成功破坏1个 oak_log 原木并捡起掉落物。
+[chat] 收集后现在有 3 个 oak_log 原木
+[chat] 开始第 4 次尝试收集 oak_log 原木
+[chat] 找到 oak_log 原木在 -539, 72, 597
+[chat] 已到达 (-539,72,597) 附近
+[ERROR] Execution timeout after 200000ms

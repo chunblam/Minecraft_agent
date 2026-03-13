@@ -38,6 +38,27 @@ except ImportError:
 MIN_RELIABILITY = 0.4
 
 
+def is_valid_skill_code(code: str) -> bool:
+    """
+    检查技能 code 是否可安全注入执行（避免截断导致 "Unexpected token ')'"）。
+    要求：括号平衡、形如 async function 且至少包含闭合的函数体。
+    """
+    if not code or not code.strip():
+        return False
+    s = code.strip()
+    # 应为 async function 开头
+    if "async" not in s or "function" not in s:
+        return False
+    # 大括号平衡
+    open_b = s.count("{") - s.count("}")
+    if open_b != 0:
+        return False
+    # 至少有一个 }，避免只有签名的截断
+    if "}" not in s:
+        return False
+    return True
+
+
 class SkillLibrary:
     """
     代码技能库。存储 JS 函数，检索时返回代码字符串供 LLM 使用。
@@ -96,6 +117,10 @@ class SkillLibrary:
             logger.warning(f"[SkillLib] 技能解析失败: {raw[:100]}")
             return None
 
+        if not is_valid_skill_code(skill["code"]):
+            logger.warning(f"[SkillLib] 技能 {skill.get('name', '')!r} code 无效（截断或括号不匹配），不写入库")
+            return None
+
         skill["reliability_score"] = 1.0
         skill["success_count"]     = 1
         skill["fail_count"]        = 0
@@ -120,7 +145,7 @@ class SkillLibrary:
     async def get_programs_string(self, query: str, top_k: int = 5) -> str:
         """
         返回格式化的技能代码字符串，直接注入到 CODE_GENERATION_HUMAN_TEMPLATE 的 context。
-        与 Voyager SkillManager.programs 属性对等。
+        与 Voyager SkillManager.programs 属性对等。无效 code 不注入，仅标注描述。
         """
         logger.log("FLOW", f"SkillLib.get_programs_string(query={query[:40]!r}, top_k={top_k})")
         results = await self.search_skills(query, top_k)
@@ -130,15 +155,20 @@ class SkillLibrary:
         lines = ["## Retrieved Skills (reuse these if applicable):\n"]
         for r in results:
             sk = r["skill"]
+            code = sk.get("code", "")
             lines.append(f"// {sk.get('description', '')}")
-            lines.append(sk.get("code", ""))
+            if is_valid_skill_code(code):
+                lines.append(code)
+            else:
+                if code and code.strip():
+                    logger.debug(f"[SkillLib] 技能 {sk.get('name', '')!r} code 无效已跳过")
+                lines.append("// (代码无效，已跳过，请勿调用)")
             lines.append("")
         return "\n".join(lines)
 
     async def get_programs_code_list(self, query: str, top_k: int = 5) -> list[str]:
         """
-        返回本次检索到的技能 code 列表，与 get_programs_string 共用 search_skills，
-        保证与注入 LLM context 的技能一致，供执行时注入 Node 环境。
+        返回本次检索到的技能 code 列表（仅含语法有效的），供执行时注入 Node 环境。
         """
         results = await self.search_skills(query, top_k)
         if not results:
@@ -147,14 +177,15 @@ class SkillLibrary:
         for r in results:
             sk = r.get("skill", r)
             code = sk.get("code", "") if isinstance(sk, dict) else getattr(sk, "code", "") or ""
-            if code and code.strip():
-                codes.append(code.strip())
+            code = code.strip()
+            if code and is_valid_skill_code(code):
+                codes.append(code)
         return codes
 
     async def get_programs_context_and_codes(self, query: str, top_k: int = 5) -> tuple[str, list[str]]:
         """
-        一次检索同时返回：格式化的技能上下文字符串 + 技能 code 列表。
-        保证 context 与 skill_codes 一致，供 prompt 与 execute 注入使用。
+        一次检索同时返回：格式化的技能上下文字符串 + 仅含有效 code 的列表。
+        无效 code 不注入执行，context 中标注「代码无效，已跳过」保持与 codes 一致。
         """
         results = await self.search_skills(query, top_k)
         if not results:
@@ -163,12 +194,16 @@ class SkillLibrary:
         codes = []
         for r in results:
             sk = r["skill"]
-            lines.append(f"// {sk.get('description', '')}")
             code = sk.get("code", "")
-            lines.append(code)
-            lines.append("")
-            if code and code.strip():
+            lines.append(f"// {sk.get('description', '')}")
+            if is_valid_skill_code(code):
+                lines.append(code)
                 codes.append(code.strip())
+            else:
+                if code and code.strip():
+                    logger.debug(f"[SkillLib] 技能 {sk.get('name', '')!r} code 无效已跳过")
+                lines.append("// (代码无效，已跳过，请勿调用)")
+            lines.append("")
         return "\n".join(lines), codes
 
     # ── ChromaDB ─────────────────────────────────────────────────────────────

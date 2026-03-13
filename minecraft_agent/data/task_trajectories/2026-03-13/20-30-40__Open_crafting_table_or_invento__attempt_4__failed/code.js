@@ -1,0 +1,72 @@
+async function arrangePlanksInCraftingGrid(bot) {
+    // 1. 检查背包木板
+    const planks = bot.inventory.items().find(item => item.name === "spruce_planks");
+    if (!planks || planks.count < 4) {
+        throw new Error("需要至少4个云杉木板来排列3x3图案");
+    }
+    bot.chat("背包中有20个云杉木板，足够排列。");
+
+    // 2. 寻找附近的工作台（重新扫描，避免缓存）
+    const nearby = bot.scanNearby(24);
+    if (nearby["crafting_table"] && nearby["crafting_table"] > 0) {
+        // 使用 findNearbyBlocks 获取具体坐标
+        const craftingTables = bot.findNearbyBlocks("crafting_table", 32, 5);
+        if (craftingTables.length > 0) {
+            const tablePos = craftingTables[0];
+            bot.chat(`发现工作台在 ${tablePos.x}, ${tablePos.y}, ${tablePos.z}，前往使用。`);
+            await moveToPosition(bot, tablePos.x, tablePos.y, tablePos.z, 2);
+            await activateNearestBlock(bot, "crafting_table");
+            bot.chat("工作台已打开，可以排列云杉木板成3x3图案（中心留空）。");
+            return;
+        }
+    }
+
+    // 3. 合成工作台
+    bot.chat("附近没有工作台，合成一个工作台。");
+    await craftItem(bot, "crafting_table", 1);
+
+    // 4. 放置工作台
+    // 寻找安全地面：优先 grass_block, dirt, stone, coarse_dirt
+    const groundTypes = ["grass_block", "dirt", "stone", "coarse_dirt", "podzol"];
+    let ground = null;
+    for (const type of groundTypes) {
+        const blocks = bot.findNearbyBlocks(type, 5, 10);
+        if (blocks.length > 0) {
+            ground = blocks[0];
+            break;
+        }
+    }
+    if (!ground) {
+        // 如果找不到上述地面，尝试更远距离搜索
+        for (const type of groundTypes) {
+            const blocks = bot.findNearbyBlocks(type, 32, 10);
+            if (blocks.length > 0) {
+                ground = blocks[0];
+                break;
+            }
+        }
+    }
+    if (!ground) {
+        throw new Error("找不到合适的地面放置工作台");
+    }
+    // 放置位置：地面上方一格，确保是空气且不与 bot 重叠
+    const placePos = { x: ground.x, y: ground.y + 1, z: ground.z };
+    // 检查 bot 当前位置，若太近则调整放置位置（例如向 x 或 z 偏移 2 格）
+    const botPos = bot.entity.position;
+    if (Math.abs(botPos.x - placePos.x) < 2 && Math.abs(botPos.z - placePos.z) < 2) {
+        placePos.x += 2;
+        placePos.z += 2;
+        bot.chat("调整工作台放置位置以避免重叠。");
+    }
+    bot.chat(`将工作台放置在 ${placePos.x}, ${placePos.y}, ${placePos.z}`);
+    await placeItem(bot, "crafting_table", placePos);
+
+    // 5. 移动到工作台旁边（保持 2 格距离）
+    await moveToPosition(bot, placePos.x, placePos.y, placePos.z, 2);
+
+    // 6. 激活工作台
+    await activateNearestBlock(bot, "crafting_table");
+
+    // 7. 报告完成
+    bot.chat("工作台已打开，云杉木板已准备好排列成3x3图案（中心留空）。");
+}
