@@ -1,5 +1,6 @@
 # ── Python ─────────────────────────────────────────────────
 .env
+.env.example
 *.pyc
 __pycache__/
 *.egg-info/
@@ -9,10 +10,20 @@ venv/
 .pytest_cache/
 .mypy_cache/
 
-# ── 数据与日志（含敏感信息）────────────────────────────────
+# ── minecraft_agent 敏感信息（勿提交到远程）────────────────────
+minecraft_agent/.env
+minecraft_agent/.env.local
 minecraft_agent/data/chroma_db/
-minecraft_agent/logs/*.log
-minecraft_agent/logs/*.zip
+minecraft_agent/data/skill_db/
+minecraft_agent/logs/
+minecraft_agent/data/knowledge_base/
+minecraft_agent/data/skill_db/
+*.key
+*.pem
+*credentials*
+*secrets*
+
+# ── 其他（按需保留）────────────────────────────────────────────
 docs/
 
 # ── Java / Gradle ─────────────────────────────────────────
